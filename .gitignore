@@ -1,0 +1,19 @@
+# Dependencies and build outputs
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Local session data and generated demo/package artifacts
+.picode/
+*.tgz
+
+# macOS metadata
+.DS_Store
+
+.vscode
