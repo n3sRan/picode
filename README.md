@@ -1,6 +1,6 @@
 # picode
 
-`picode` 是一个从零实现的 TypeScript Coding Agent。当前仓库已完成 Phase 2：项目脚手架、配置解析、密钥脱敏、LLM 内部协议/provider 抽象、工具参数校验、路径边界、文件工具、命令审批和 `finish` 契约；Agent Loop 与会话将在后续阶段实现。
+`picode` 是一个从零实现的 TypeScript Coding Agent。当前仓库已完成 Phase 3 核心：项目脚手架、配置解析、密钥脱敏、LLM 内部协议/provider 抽象、工具参数校验、路径边界、文件工具、命令审批、显式 Agent Loop、终止限制、上下文预算保护和 `finish` 契约；会话与完整 CLI 入口将在后续阶段接入。
 
 ## 环境
 
@@ -29,6 +29,8 @@ npm test
 
 Phase 2 的文件工具只访问 canonical workspace 和当前 session 的 `/tmp/picode-<session-id>/`；`.env`/`.env.*` 受保护（`.env.example` 除外）。`run_command` 每次都要经过审批，获批后以当前用户权限运行，不构成操作系统级沙箱；子进程不会继承 `PICODE_*` 或 `OPENAI_API_KEY`。
 
+Phase 3 的 `AgentLoop` 显式推进 context check → LLM → tool-call 预验证 → 严格串行工具执行 → result feedback，要求模型通过唯一的 `finish` 工具结束任务，并执行请求数、活跃时间、连续错误、重复调用、取消和上下文预算限制。审批等待不计入活跃时间，工具批次在执行前整体校验。
+
 ## CLI
 
 构建后可运行：
@@ -37,4 +39,4 @@ Phase 2 的文件工具只访问 canonical workspace 和当前 session 的 `/tmp
 node dist/cli.js --cwd /path/to/workspace "task"
 ```
 
-当前 CLI 仍仅验证启动目录和 `--cwd`，Agent Loop 与完整任务入口将在后续阶段接入。
+当前 CLI 仍仅验证启动目录和 `--cwd`；会话、交互式入口与 AgentLoop 的完整任务接线将在后续阶段接入。
