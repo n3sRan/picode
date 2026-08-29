@@ -1,0 +1,34 @@
+import type { AssistantMessage, LlmUsage, ToolCall } from "./messages.js";
+import type { AgentState, TerminalState, TerminationReason } from "./state.js";
+
+export type ToolExecutionStatus =
+  | "ok"
+  | "error"
+  | "permission_denied"
+  | "aborted"
+  | "timeout"
+  | "interrupted"
+  | "batch_rejected";
+
+export type AgentEvent =
+  | { type: "state_changed"; state: AgentState }
+  | { type: "assistant_text_delta"; delta: string }
+  | { type: "assistant_message_completed"; message: AssistantMessage }
+  | { type: "llm_usage_received"; usage: LlmUsage }
+  | { type: "tool_requested"; toolCall: ToolCall }
+  | {
+      type: "approval_requested";
+      command: string;
+      cwd: string;
+      timeoutMs: number;
+      riskNote: string;
+    }
+  | { type: "approval_resolved"; approved: boolean }
+  | { type: "tool_completed"; toolCallId: string; status: ToolExecutionStatus; summary: string }
+  | { type: "context_warning"; message: string; ratio: number }
+  | {
+      type: "agent_terminated";
+      state: TerminalState;
+      reason: TerminationReason;
+      message: string;
+    };

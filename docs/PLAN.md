@@ -2,7 +2,7 @@
 
 ## 1. 状态与原则
 
-- 当前状态：Phase 0 已完成，尚未开始 Phase 1 编码。
+- 当前状态：Phase 0 已完成，Phase 1 已提交，尚未开始 Phase 2 编码。
 - 优先完成可解释、可测试的 MVP，不以生产级完整性为目标。
 - 每个阶段都必须保持可构建、可测试。
 - 可选增强只能在全部 MVP 验收通过后开始。
@@ -12,7 +12,7 @@
 | 阶段 | 目标 | 验收出口 |
 | --- | --- | --- |
 | M0 | 项目脚手架与配置 | 构建、类型检查和基础配置测试可运行（已完成） |
-| M1 | LLM Adapter 与内部协议 | 模拟流可产生文本、tool calls、usage 和结束原因 |
+| M1 | LLM Adapter 与内部协议 | 模拟流可产生文本、tool calls、usage 和结束原因（已完成） |
 | M2 | 文件工具、路径边界与命令审批 | 七个工具完成，参数和路径安全测试通过 |
 | M3 | Agent Loop 与终止条件 | fake model 可完成串行读、改、命令验证和 `finish` |
 | M4 | 基本会话持久化与 CLI | 会话可新建、列出、恢复；单任务与交互入口可用 |
@@ -47,6 +47,8 @@
 
 ## 4. Phase 1：LLM Adapter
 
+状态：已提交。
+
 任务：
 
 1. 定义内部 message、tool call、usage、event 和 error 类型。
@@ -64,7 +66,7 @@
 - 超时、取消、认证和网络错误。
 - assistant/tool message round-trip。
 
-出口：mocked SDK和 fake provider 都能产生稳定内部结果。
+出口：mocked SDK和 fake provider 都能产生稳定内部结果（已通过）。
 
 ## 5. Phase 2：工具与安全边界
 
