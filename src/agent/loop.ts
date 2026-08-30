@@ -55,6 +55,12 @@ export interface AgentLoopOptions {
   budgetTracker?: BudgetTracker;
   clock?: MonotonicClock;
   onEvent?: AgentEventListener;
+  beforeToolExecution?: (call: ToolCall, checkpoint: ToolExecutionCheckpoint) => void | Promise<void>;
+  afterToolExecution?: (
+    call: ToolCall,
+    result: ToolResult,
+    checkpoint: ToolExecutionCheckpoint
+  ) => void | Promise<void>;
 }
 
 export interface AgentRunResult {
@@ -65,6 +71,7 @@ export interface AgentRunResult {
   messages: readonly Message[];
   events: readonly AgentEvent[];
   limits: LimitSnapshot;
+  usage?: LlmUsage;
   finish?: FinishArgs;
 }
 
@@ -85,9 +92,10 @@ interface BatchValidation {
   repetitionViolation?: RepetitionCheck;
 }
 
-interface CompletedToolCall {
-  call: ToolCall;
-  result: ToolResult;
+export interface ToolExecutionCheckpoint {
+  messages: readonly Message[];
+  usage?: LlmUsage;
+  limits: LimitSnapshot;
 }
 
 class LoopApprovalBroker implements ApprovalBroker {
@@ -185,6 +193,8 @@ export class AgentLoop {
   private readonly onEvent: AgentEventListener | undefined;
   private readonly clock: MonotonicClock;
   private readonly budget: BudgetTracker;
+  private readonly beforeToolExecution: AgentLoopOptions["beforeToolExecution"];
+  private readonly afterToolExecution: AgentLoopOptions["afterToolExecution"];
   private state: AgentState = "idle";
   private running = false;
   private messages: Message[] = [];
@@ -193,6 +203,7 @@ export class AgentLoop {
   private activeTime: ActiveTimeTracker;
   private repetition = new RepetitionTracker();
   private finishArgs: FinishArgs | undefined;
+  private lastUsage: LlmUsage | undefined;
   private executionContext: ToolExecutionContext;
 
   public constructor(options: AgentLoopOptions) {
@@ -206,6 +217,8 @@ export class AgentLoop {
     this.onEvent = options.onEvent;
     this.clock = options.clock ?? systemMonotonicClock;
     this.budget = options.budgetTracker ?? new BudgetTracker({ contextWindow: options.contextWindow ?? 128_000 });
+    this.beforeToolExecution = options.beforeToolExecution;
+    this.afterToolExecution = options.afterToolExecution;
     this.activeTime = new ActiveTimeTracker(this.clock);
     this.executionContext = this.baseToolContext;
   }
@@ -226,6 +239,7 @@ export class AgentLoop {
     this.state = "idle";
     this.events = [];
     this.finishArgs = undefined;
+    this.lastUsage = undefined;
     this.budget.reset();
     this.limits = new TaskLimitTracker(this.limitOptions);
     this.activeTime = new ActiveTimeTracker(this.clock);
@@ -312,8 +326,10 @@ export class AgentLoop {
       });
       const effectiveUsage = response.usage ?? observedUsage;
       if (effectiveUsage === undefined) {
+        this.lastUsage = undefined;
         this.budget.recordMissingUsage();
       } else {
+        this.lastUsage = effectiveUsage;
         this.budget.recordUsage(effectiveUsage, promptMessages, toolDefinitions);
       }
 
@@ -438,21 +454,20 @@ export class AgentLoop {
     calls: readonly ToolCall[],
     signal: AbortSignal
   ): Promise<AgentRunResult | undefined> {
-    const completed: CompletedToolCall[] = [];
+    let finishResult: ToolResult | undefined;
     for (const [entryIndex, entry] of entries.entries()) {
       const remainingCalls = calls.slice(entryIndex + 1);
       if (signal.aborted) {
-        this.appendCompletedResults(completed);
         this.appendRejectedResults(remainingCalls, "aborted", "Tool call was skipped because the task was aborted.");
         return this.terminate("aborted", "aborted", "The task was aborted during tool execution.");
       }
       if (this.activeTime.elapsedMs() >= this.limits.maxActiveMs) {
-        this.appendCompletedResults(completed);
         this.appendRejectedResults(remainingCalls, "batch_rejected", "Tool call was skipped because the active time limit was reached.");
         return this.terminate("limit_reached", "limit_reached", limitViolationMessage("active_time_limit"));
       }
 
       this.setState("executing_tool");
+      await this.beforeToolExecution?.(entry.call, this.executionCheckpoint());
       let result: ToolResult;
       try {
         result = await entry.definition.execute(this.executionContext, entry.args, signal);
@@ -463,28 +478,35 @@ export class AgentLoop {
           content: signal.aborted ? "Tool execution was aborted." : this.redact(safeErrorMessage(error))
         };
       }
-      completed.push({ call: entry.call, result });
+      if (signal.aborted && result.status === "ok") {
+        result = {
+          status: "aborted",
+          content: "Tool completed after task cancellation; side-effect state may have changed."
+        };
+      }
       this.emitToolCompleted(entry.call, result);
+      this.setState("recording_results");
+      this.appendToolResult(entry.call, result, false);
+      await this.afterToolExecution?.(entry.call, result, this.executionCheckpoint());
+      if (entry.call.name === "finish") {
+        finishResult = result;
+      }
 
       const errorViolation = this.limits.recordToolResult(result.status, {
         approvalDenied: entry.call.name === "run_command" && result.status === "permission_denied"
       });
       if (result.status === "aborted" || result.status === "interrupted") {
-        this.appendCompletedResults(completed);
         this.appendRejectedResults(remainingCalls, "aborted", "Tool call was skipped because a preceding tool was aborted.");
         return this.terminate("aborted", "aborted", "The task was aborted during tool execution.");
       }
       if (errorViolation !== undefined) {
-        this.appendCompletedResults(completed);
         this.appendRejectedResults(remainingCalls, "batch_rejected", "Tool call was skipped after the consecutive tool error limit was reached.");
         return this.terminate("limit_reached", "limit_reached", limitViolationMessage(errorViolation));
       }
     }
 
-    this.appendCompletedResults(completed);
     const finishEntry = entries.find((entry) => entry.call.name === "finish");
     if (finishEntry !== undefined) {
-      const finishResult = completed.find((item) => item.call.id === finishEntry.call.id)?.result;
       const finishArgs = finishEntry.args as FinishArgs;
       this.finishArgs = finishArgs;
       if (finishResult?.status !== "ok") {
@@ -529,16 +551,6 @@ export class AgentLoop {
     this.setState("recording_results");
     for (const call of calls) {
       this.appendToolResult(call, { status, content });
-    }
-  }
-
-  private appendCompletedResults(completed: readonly CompletedToolCall[]): void {
-    if (completed.length === 0) {
-      return;
-    }
-    this.setState("recording_results");
-    for (const item of completed) {
-      this.appendToolResult(item.call, item.result, false);
     }
   }
 
@@ -646,7 +658,16 @@ export class AgentLoop {
       messages: [...this.messages],
       events: [...this.events],
       limits: this.limits.snapshot(this.activeTime.elapsedMs()),
+      ...(this.lastUsage === undefined ? {} : { usage: this.lastUsage }),
       ...(finish === undefined ? {} : { finish })
+    };
+  }
+
+  private executionCheckpoint(): ToolExecutionCheckpoint {
+    return {
+      messages: [...this.messages],
+      limits: this.limits.snapshot(this.activeTime.elapsedMs()),
+      ...(this.lastUsage === undefined ? {} : { usage: this.lastUsage })
     };
   }
 

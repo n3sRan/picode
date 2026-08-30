@@ -16,6 +16,7 @@ export interface CliApprovalBrokerOptions {
   input?: Readable;
   output?: Writable;
   isInteractive?: boolean;
+  question?: (prompt: string, signal?: AbortSignal) => Promise<string>;
 }
 
 export class TestApprovalBroker implements ApprovalBroker {
@@ -54,6 +55,7 @@ export class CliApprovalBroker implements ApprovalBroker {
   private readonly input: Readable;
   private readonly output: Writable;
   private readonly interactive: boolean;
+  private readonly question: CliApprovalBrokerOptions["question"];
 
   public constructor(options: CliApprovalBrokerOptions = {}) {
     this.input = options.input ?? process.stdin;
@@ -61,11 +63,20 @@ export class CliApprovalBroker implements ApprovalBroker {
     const inputIsTty = (this.input as Readable & { isTTY?: boolean }).isTTY === true;
     const outputIsTty = (this.output as Writable & { isTTY?: boolean }).isTTY === true;
     this.interactive = options.isInteractive ?? (inputIsTty && outputIsTty);
+    this.question = options.question;
   }
 
   public async requestApproval(request: ApprovalRequest, signal?: AbortSignal): Promise<boolean> {
     if (!this.interactive || signal?.aborted) {
       return false;
+    }
+
+    if (this.question !== undefined) {
+      try {
+        return isYes(await this.question(formatApprovalPrompt(request), signal));
+      } catch {
+        return false;
+      }
     }
 
     const readline = createInterface({ input: this.input, output: this.output });

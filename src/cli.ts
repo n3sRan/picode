@@ -3,8 +3,13 @@
 import { realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import type { Readable, Writable } from "node:stream";
+import { OpenAIChatProvider } from "./llm/openai-chat-provider.js";
+import type { LlmProvider } from "./llm/provider.js";
 import { loadConfig, readAllowedDotenv } from "./config.js";
 import { formatError } from "./security/redact.js";
+import { SessionStore } from "./sessions/index.js";
+import { exitCodeForTerminalState, TerminalApp } from "./ui/index.js";
 
 export interface CliOptions {
   cwd: string;
@@ -21,6 +26,10 @@ export interface MainOptions {
   startupDir?: string;
   stdout?: CliWriter;
   stderr?: CliWriter;
+  input?: Readable;
+  sessionRoot?: string;
+  provider?: LlmProvider;
+  isInteractive?: boolean;
 }
 
 export class CliUsageError extends Error {
@@ -36,6 +45,12 @@ const USAGE = `Usage: picode [--cwd <path>] [<task>]
 Options:
   --cwd <path>  Use an existing directory as the workspace.
   --help        Show this help.
+
+Interactive commands:
+  /new [name]   Create and switch to a new session.
+  /sessions     List sessions for the current workspace.
+  /resume <id>  Resume a session by full ID or unambiguous prefix.
+  /exit         Exit interactive mode.
 `;
 
 function canonicalDirectory(pathValue: string, label: string): string {
@@ -99,7 +114,66 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
   return { cwd, help, ...(task === undefined ? {} : { task }) };
 }
 
-export function main(args = process.argv.slice(2), options: MainOptions = {}): number {
+function writeCliError(
+  error: unknown,
+  startupDir: string,
+  env: NodeJS.ProcessEnv,
+  stderr: CliWriter
+): void {
+  const dotenvApiKey = (() => {
+    try {
+      return readAllowedDotenv(resolve(startupDir, ".env")).PICODE_API_KEY;
+    } catch {
+      return undefined;
+    }
+  })();
+  const message = formatError(error, [env.PICODE_API_KEY, dotenvApiKey]);
+  stderr.write("picode: " + message + "\n");
+}
+
+async function runConfiguredCli(
+  cliOptions: CliOptions,
+  config: ReturnType<typeof loadConfig>,
+  startupDir: string,
+  env: NodeJS.ProcessEnv,
+  options: MainOptions
+): Promise<number> {
+  const stdout = options.stdout ?? process.stdout;
+  const stderr = options.stderr ?? process.stderr;
+  try {
+    const sessionStore = new SessionStore({
+      workspaceRoot: cliOptions.cwd,
+      ...(options.sessionRoot === undefined ? {} : { rootDir: options.sessionRoot }),
+      redactionSecrets: [config.apiKey]
+    });
+    const provider = options.provider ?? new OpenAIChatProvider({
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      model: config.model
+    });
+    const app = new TerminalApp({
+      workspaceRoot: cliOptions.cwd,
+      config,
+      provider,
+      sessionStore,
+      input: options.input ?? process.stdin,
+      output: stdout as unknown as Writable,
+      errorOutput: stderr as unknown as Writable,
+      ...(options.isInteractive === undefined ? {} : { isInteractive: options.isInteractive })
+    });
+    if (cliOptions.task !== undefined) {
+      await app.initialize({ newSession: true });
+      const result = await app.runTask(cliOptions.task);
+      return exitCodeForTerminalState(result.terminalState);
+    }
+    return await app.runInteractive();
+  } catch (error) {
+    writeCliError(error, startupDir, env, stderr);
+    return 1;
+  }
+}
+
+export function main(args = process.argv.slice(2), options: MainOptions = {}): number | Promise<number> {
   const startupDir = options.startupDir ?? process.cwd();
   const env = options.env ?? process.env;
   const stdout = options.stdout ?? process.stdout;
@@ -112,20 +186,10 @@ export function main(args = process.argv.slice(2), options: MainOptions = {}): n
       return 0;
     }
 
-    // Phase 0 validates configuration before any future network request.
-    loadConfig({ startupDir, env });
-    stdout.write("picode Phase 0 scaffold is ready; task execution is not implemented yet.\n");
-    return 0;
+    const config = loadConfig({ startupDir, env });
+    return runConfiguredCli(cliOptions, config, startupDir, env, options);
   } catch (error) {
-    const dotenvApiKey = (() => {
-      try {
-        return readAllowedDotenv(resolve(startupDir, ".env")).PICODE_API_KEY;
-      } catch {
-        return undefined;
-      }
-    })();
-    const message = formatError(error, [env.PICODE_API_KEY, dotenvApiKey]);
-    stderr.write(`picode: ${message}\n`);
+    writeCliError(error, startupDir, env, stderr);
     return 1;
   }
 }
@@ -136,7 +200,17 @@ if (invokedScript !== undefined) {
     const invokedPath = realpathSync(resolve(invokedScript));
     const modulePath = realpathSync(fileURLToPath(import.meta.url));
     if (invokedPath === modulePath) {
-      process.exitCode = main();
+      const result = main();
+      if (typeof result === "number") {
+        process.exitCode = result;
+      } else {
+        void result.then((exitCode) => {
+          process.exitCode = exitCode;
+        }).catch((error: unknown) => {
+          process.stderr.write("picode: " + formatError(error, [process.env.PICODE_API_KEY]) + "\n");
+          process.exitCode = 1;
+        });
+      }
     }
   } catch {
     // Importing this module from tests must not execute the CLI.

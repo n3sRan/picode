@@ -1,5 +1,10 @@
 export { AgentLoop, AgentLoopBusyError, PROTOCOL_REMINDER } from "./loop.js";
-export type { AgentEventListener, AgentLoopOptions, AgentRunResult } from "./loop.js";
+export type {
+  AgentEventListener,
+  AgentLoopOptions,
+  AgentRunResult,
+  ToolExecutionCheckpoint
+} from "./loop.js";
 export {
   ActiveTimeTracker,
   TaskLimitTracker,
