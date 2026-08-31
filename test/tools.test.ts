@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -13,7 +15,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CliApprovalBroker, TestApprovalBroker } from "../src/security/approval.js";
-import { PathPolicy, PathPolicyError } from "../src/security/path-policy.js";
+import { DEFAULT_SESSION_TEMP_ROOT, PathPolicy, PathPolicyError } from "../src/security/path-policy.js";
 import { atomicWriteFile } from "../src/tools/file-utils.js";
 import {
   createBuiltinToolRegistry,
@@ -115,6 +117,17 @@ describe("tool validators and registry", () => {
 });
 
 describe("file tools and PathPolicy", () => {
+  it("uses the documented /tmp session root by default", () => {
+    const workspace = temporaryDirectory("picode-default-session-workspace-");
+    const sessionId = `default-root-${randomUUID()}`;
+    const policy = new PathPolicy({ workspaceRoot: workspace, sessionId });
+    createdDirectories.push(policy.sessionTmpDir);
+
+    expect(policy.sessionTmpDir).toBe(
+      join(realpathSync(DEFAULT_SESSION_TEMP_ROOT), `picode-${sessionId}`)
+    );
+  });
+
   it("reads line ranges, lists files, searches literal text, and writes session temp files", async () => {
     const context = makeContext();
     const write = await writeFileTool.execute(context, {
@@ -155,6 +168,78 @@ describe("file tools and PathPolicy", () => {
     }, new AbortController().signal);
     expect(sessionWrite.status).toBe("ok");
     expect(readFileSync(sessionFile, "utf8")).toBe("session-only");
+  });
+
+  it("enforces a host-side search budget and reports an incomplete scan", async () => {
+    const context = makeContext();
+    writeFileSync(join(context.workspace, "a.txt"), "needle");
+    writeFileSync(join(context.workspace, "b.txt"), "needle");
+    context.searchBudget = { maxFiles: 1, maxBytes: 1_000 };
+
+    const result = await searchFilesTool.execute(
+      context,
+      { query: "needle" },
+      new AbortController().signal
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      metadata: {
+        matchCount: 1,
+        scannedFiles: 1,
+        scanComplete: false,
+        stopReason: "file_limit"
+      }
+    });
+    expect(result.content).toContain("a.txt:1: needle");
+    expect(result.content).toContain("Search stopped after scanning 1 files.");
+    expect(result.content).not.toContain("b.txt:1: needle");
+  });
+
+  it("stops before reading a file that exceeds the remaining byte budget", async () => {
+    const context = makeContext();
+    writeFileSync(join(context.workspace, "large-enough.txt"), "needle");
+    context.searchBudget = { maxFiles: 10, maxBytes: 3 };
+
+    const result = await searchFilesTool.execute(
+      context,
+      { query: "needle" },
+      new AbortController().signal
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      metadata: {
+        matchCount: 0,
+        scannedFiles: 0,
+        scannedBytes: 0,
+        scanComplete: false,
+        stopReason: "byte_limit"
+      }
+    });
+    expect(result.content).toContain("No matches found.");
+    expect(result.content).toContain("Search stopped after scanning 3 bytes.");
+  });
+
+  it("honors cancellation at an asynchronous scan boundary", async () => {
+    const context = makeContext();
+    writeFileSync(join(context.workspace, "a.txt"), "needle");
+    const controller = new AbortController();
+    const originalResolvePath = context.pathPolicy.resolvePath.bind(context.pathPolicy);
+    let resolveCount = 0;
+    context.pathPolicy.resolvePath = (pathValue, operation) => {
+      const resolved = originalResolvePath(pathValue, operation);
+      resolveCount += 1;
+      if (resolveCount === 2) {
+        controller.abort();
+      }
+      return resolved;
+    };
+
+    const result = await searchFilesTool.execute(context, { query: "needle" }, controller.signal);
+
+    expect(result).toMatchObject({ status: "aborted" });
+    expect(result.content).toContain("Search was aborted");
   });
 
   it("rejects traversal, similar prefixes, absolute outside paths, and symlink escapes", () => {

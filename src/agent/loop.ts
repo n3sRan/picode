@@ -25,6 +25,7 @@ import {
   TaskLimitTracker,
   type AgentLimitOptions,
   type LimitSnapshot,
+  type LimitViolation,
   type MonotonicClock
 } from "./limits.js";
 import { RepetitionTracker, type RepetitionCheck } from "./repetition.js";
@@ -281,7 +282,7 @@ export class AgentLoop {
       this.setState("preparing_context");
       const limitViolation = this.limits.checkBeforeRequest(this.activeTime.elapsedMs());
       if (limitViolation !== undefined) {
-        return this.terminate("limit_reached", "limit_reached", limitViolationMessage(limitViolation));
+        return this.terminate("limit_reached", "limit_reached", this.formatLimitViolation(limitViolation));
       }
 
       const budgetDecision = this.budget.beforeRequest(this.messages, toolDefinitions);
@@ -346,7 +347,7 @@ export class AgentLoop {
         return this.terminateWithSkippedTools(
           "limit_reached",
           "limit_reached",
-          limitViolationMessage("active_time_limit"),
+          this.formatLimitViolation("active_time_limit"),
           assistantMessage.toolCalls
         );
       }
@@ -355,7 +356,7 @@ export class AgentLoop {
       if (assistantMessage.toolCalls.length === 0) {
         const noFinishViolation = this.limits.recordTextOnlyTurn();
         if (noFinishViolation !== undefined) {
-          return this.terminate("failed", "protocol_error", limitViolationMessage(noFinishViolation));
+          return this.terminate("failed", "protocol_error", this.formatLimitViolation(noFinishViolation));
         }
         this.setState("recording_results");
         this.messages.push({ role: "user", content: PROTOCOL_REMINDER });
@@ -464,7 +465,7 @@ export class AgentLoop {
       }
       if (this.activeTime.elapsedMs() >= this.limits.maxActiveMs) {
         this.appendRejectedResults(remainingCalls, "batch_rejected", "Tool call was skipped because the active time limit was reached.");
-        return this.terminate("limit_reached", "limit_reached", limitViolationMessage("active_time_limit"));
+        return this.terminate("limit_reached", "limit_reached", this.formatLimitViolation("active_time_limit"));
       }
 
       this.setState("executing_tool");
@@ -502,7 +503,7 @@ export class AgentLoop {
       }
       if (errorViolation !== undefined) {
         this.appendRejectedResults(remainingCalls, "batch_rejected", "Tool call was skipped after the consecutive tool error limit was reached.");
-        return this.terminate("limit_reached", "limit_reached", limitViolationMessage(errorViolation));
+        return this.terminate("limit_reached", "limit_reached", this.formatLimitViolation(errorViolation));
       }
     }
 
@@ -522,6 +523,13 @@ export class AgentLoop {
       );
     }
     return undefined;
+  }
+
+  private formatLimitViolation(violation: LimitViolation): string {
+    return limitViolationMessage(violation, {
+      maxConsecutiveToolErrors: this.limits.maxConsecutiveToolErrors,
+      maxNoFinishTurns: this.limits.maxNoFinishTurns
+    });
   }
 
   private appendInvalidBatchResults(calls: readonly ToolCall[], issues: ReadonlyMap<number, string>): void {

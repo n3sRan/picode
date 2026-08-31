@@ -1,6 +1,6 @@
 import type { ToolExecutionStatus } from "../tools/types.js";
 
-export const DEFAULT_MAX_LLM_REQUESTS = 50;
+export const DEFAULT_MAX_LLM_REQUESTS = 30;
 export const DEFAULT_MAX_ACTIVE_MS = 10 * 60 * 1_000;
 export const DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 export const DEFAULT_MAX_NO_FINISH_TURNS = 3;
@@ -24,6 +24,11 @@ export type LimitViolation =
   | "active_time_limit"
   | "tool_error_limit"
   | "no_finish_limit";
+
+export interface LimitViolationMessageOptions {
+  maxConsecutiveToolErrors?: number;
+  maxNoFinishTurns?: number;
+}
 
 export interface MonotonicClock {
   now(): number;
@@ -143,15 +148,18 @@ export class TaskLimitTracker {
   }
 }
 
-export function limitViolationMessage(violation: LimitViolation): string {
+export function limitViolationMessage(
+  violation: LimitViolation,
+  options: LimitViolationMessageOptions = {}
+): string {
   switch (violation) {
     case "llm_request_limit":
       return "The maximum number of LLM requests for this task has been reached.";
     case "active_time_limit":
       return "The maximum active time for this task has been reached.";
     case "tool_error_limit":
-      return "The task stopped after three consecutive tool errors.";
+      return `The task stopped after ${options.maxConsecutiveToolErrors ?? DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS} consecutive tool errors.`;
     case "no_finish_limit":
-      return "The model did not call finish after three consecutive text-only turns.";
+      return `The model did not call finish after ${options.maxNoFinishTurns ?? DEFAULT_MAX_NO_FINISH_TURNS} consecutive text-only turns.`;
   }
 }

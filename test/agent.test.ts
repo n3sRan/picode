@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentLoop, type MonotonicClock } from "../src/agent/index.js";
+import { AgentLoop, limitViolationMessage, type MonotonicClock } from "../src/agent/index.js";
 import { BudgetTracker } from "../src/context/index.js";
 import type { AssistantMessage, JsonObject, LlmUsage, Message, ToolCall } from "../src/domain/messages.js";
 import type { LlmProvider, LlmRequest, LlmResponse } from "../src/llm/provider.js";
@@ -321,6 +321,15 @@ describe("AgentLoop flow and tool batching", () => {
 });
 
 describe("AgentLoop limits and cancellation", () => {
+  it("uses configured consecutive-limit values in violation messages", () => {
+    expect(limitViolationMessage("tool_error_limit", { maxConsecutiveToolErrors: 5 })).toContain(
+      "after 5 consecutive tool errors"
+    );
+    expect(limitViolationMessage("no_finish_limit", { maxNoFinishTurns: 2 })).toContain(
+      "after 2 consecutive text-only turns"
+    );
+  });
+
   it("fails after three text-only turns and sends protocol reminders first", async () => {
     const provider = new ScriptedLlmProvider([
       { response: assistant([], "first text") },

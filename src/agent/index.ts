@@ -16,6 +16,12 @@ export {
   DEFAULT_MAX_LLM_REQUESTS,
   DEFAULT_MAX_NO_FINISH_TURNS
 } from "./limits.js";
-export type { AgentLimitOptions, LimitSnapshot, LimitViolation, MonotonicClock } from "./limits.js";
+export type {
+  AgentLimitOptions,
+  LimitSnapshot,
+  LimitViolation,
+  LimitViolationMessageOptions,
+  MonotonicClock
+} from "./limits.js";
 export { RepetitionTracker, stableSerialize, toolSignature } from "./repetition.js";
 export type { RepetitionCheck } from "./repetition.js";

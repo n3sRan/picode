@@ -68,6 +68,11 @@ export interface ToolExecutionContext {
   approvalBroker: ApprovalBroker;
   shellRunner?: ShellRunner;
   commandEnvironment?: NodeJS.ProcessEnv;
+  /** Host-side search caps; omitted in normal CLI composition. */
+  searchBudget?: {
+    maxFiles?: number;
+    maxBytes?: number;
+  };
   redactionSecrets?: readonly (string | undefined)[];
 }
 

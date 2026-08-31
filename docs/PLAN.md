@@ -2,7 +2,7 @@
 
 ## 1. 状态与原则
 
-- 当前状态：Phase 0-5 已完成，Phase 6 进行中（CLI UI 重构已完成）。
+- 当前状态：Phase 0-5 已完成，Phase 6 进行中（审查项 1–4 已完成，11–18 待开始）。
 - 优先完成可解释、可测试的 MVP，不以生产级完整性为目标。
 - 每个阶段都必须保持可构建、可测试。
 - 可选增强只能在全部 MVP 验收通过后开始。
@@ -85,6 +85,7 @@
 测试批次 C：文件与路径
 
 - 工作区内正常读写、行范围、文本搜索和输出上限。
+- `search_files` 文件数/总字节预算、取消和不完整扫描标记。
 - `..`、相似前缀、绝对路径和符号链接逃逸。
 - 新目标父目录 realpath、session tmp、工作区外拒绝。
 - `.env`/`.env.*` 禁止，`.env.example` 允许。
@@ -110,7 +111,7 @@
 2. 实现 context check → LLM → validation → serial tools → result feedback。
 3. 实现整批预验证和 tool-call/result 一一配对。
 4. 实现 `finish` 唯一调用及三种结果状态。
-5. 实现 50 次请求、10 分钟活跃时间、连续错误、无 finish 和重复调用限制。
+5. 实现 30 次请求、10 分钟活跃时间、连续错误、无 finish 和重复调用限制。
 6. 实现 Ctrl+C、LLM timeout、command timeout 和 skipped tool results。
 7. 实现简单 BudgetTracker：记录 usage、75% 警告、90% 停止和缺失 usage 降级。
 
@@ -182,7 +183,7 @@ E2E 流程：
 
 ## 9. Phase 6：加固与提交准备
 
-状态：进行中（当前子任务：CLI UI 重构已完成）。
+状态：进行中（CLI UI 重构和审查项 1–4 已完成；下一子任务：11–18 重复代码与死代码清理）。
 
 CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语义颜色，非 TTY 保持无颜色的稳定文本；assistant 流式文本、工具调用/结果、审批、usage、warning 和终态均有独立展示；renderer 可通过确定性测试验证。
 

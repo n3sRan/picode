@@ -1,5 +1,4 @@
 import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type AllowedPathRoot = "workspace" | "session_tmp";
@@ -19,6 +18,11 @@ export interface ResolvedPath {
   root: AllowedPathRoot;
   rootPath: string;
 }
+
+// The project contract uses a dedicated directory under the POSIX system
+// temporary root. The resolved public path may be /private/tmp on macOS,
+// because /tmp itself is a symlink there.
+export const DEFAULT_SESSION_TEMP_ROOT = "/tmp";
 
 export type PathPolicyErrorCode =
   | "invalid_path"
@@ -93,7 +97,7 @@ export class PathPolicy {
       throw new PathPolicyError("invalid_session_tmp", "Invalid session ID", options.sessionId);
     }
 
-    const requestedSessionDir = options.sessionTmpDir ?? join(options.tempRoot ?? tmpdir(), `picode-${options.sessionId}`);
+    const requestedSessionDir = options.sessionTmpDir ?? join(options.tempRoot ?? DEFAULT_SESSION_TEMP_ROOT, `picode-${options.sessionId}`);
     try {
       mkdirSync(requestedSessionDir, { recursive: true, mode: 0o700 });
       this.sessionTmpDir = realpathSync(requestedSessionDir);
