@@ -28,7 +28,8 @@ import {
   type MonotonicClock
 } from "./limits.js";
 import { RepetitionTracker, type RepetitionCheck } from "./repetition.js";
-import type { FinishArgs } from "../tools/finish.js";
+import { normalizeFinishArgs, type FinishArgs, type ResolvedFinishArgs } from "../tools/finish.js";
+import { DEFAULT_SYSTEM_MESSAGE } from "./prompt.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type {
   ToolDefinition,
@@ -39,7 +40,7 @@ import type {
 import { formatValidationIssues } from "../tools/validators.js";
 
 export const PROTOCOL_REMINDER =
-  "Protocol reminder: use the provided tools for the task; successful completion requires calling the finish tool.";
+  "Protocol reminder: do not end this task with text alone. If the task is complete, call finish now; otherwise use the provided tools.";
 
 export type AgentEventListener = (event: AgentEvent) => void;
 
@@ -72,7 +73,7 @@ export interface AgentRunResult {
   events: readonly AgentEvent[];
   limits: LimitSnapshot;
   usage?: LlmUsage;
-  finish?: FinishArgs;
+  finish?: ResolvedFinishArgs;
 }
 
 export class AgentLoopBusyError extends Error {
@@ -186,7 +187,7 @@ export class AgentLoop {
   private readonly provider: LlmProvider;
   private readonly tools: ToolRegistry;
   private readonly baseToolContext: ToolExecutionContext;
-  private readonly systemMessage: string | undefined;
+  private readonly systemMessage: string;
   private readonly initialMessages: readonly Message[];
   private readonly limitOptions: AgentLimitOptions;
   private readonly maxConsecutiveRepeatedToolCalls: number;
@@ -202,7 +203,7 @@ export class AgentLoop {
   private limits = new TaskLimitTracker();
   private activeTime: ActiveTimeTracker;
   private repetition = new RepetitionTracker();
-  private finishArgs: FinishArgs | undefined;
+  private finishArgs: ResolvedFinishArgs | undefined;
   private lastUsage: LlmUsage | undefined;
   private executionContext: ToolExecutionContext;
 
@@ -210,7 +211,7 @@ export class AgentLoop {
     this.provider = options.provider;
     this.tools = options.tools;
     this.baseToolContext = options.toolContext;
-    this.systemMessage = options.systemMessage;
+    this.systemMessage = options.systemMessage ?? DEFAULT_SYSTEM_MESSAGE;
     this.initialMessages = options.initialMessages ?? [];
     this.limitOptions = options.limits ?? {};
     this.maxConsecutiveRepeatedToolCalls = options.maxConsecutiveRepeatedToolCalls ?? 3;
@@ -245,7 +246,7 @@ export class AgentLoop {
     this.activeTime = new ActiveTimeTracker(this.clock);
     this.repetition = new RepetitionTracker(this.maxConsecutiveRepeatedToolCalls);
     this.messages = [...this.initialMessages];
-    if (this.systemMessage !== undefined) {
+    if (!this.messages.some((message) => message.role === "system" && message.content === this.systemMessage)) {
       this.messages.unshift({ role: "system", content: this.systemMessage });
     }
     const userMessage: UserMessage = { role: "user", content: userTask };
@@ -507,7 +508,7 @@ export class AgentLoop {
 
     const finishEntry = entries.find((entry) => entry.call.name === "finish");
     if (finishEntry !== undefined) {
-      const finishArgs = finishEntry.args as FinishArgs;
+      const finishArgs = normalizeFinishArgs(finishEntry.args as FinishArgs);
       this.finishArgs = finishArgs;
       if (finishResult?.status !== "ok") {
         return this.terminate("failed", "finish_failure", "The finish tool did not return an accepted result.");
@@ -645,7 +646,7 @@ export class AgentLoop {
     state: TerminalState,
     reason: TerminationReason,
     message: string,
-    finish?: FinishArgs
+    finish?: ResolvedFinishArgs
   ): AgentRunResult {
     this.setState(state);
     const eventMessage = this.redact(message);

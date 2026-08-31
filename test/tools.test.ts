@@ -94,7 +94,15 @@ describe("tool validators and registry", () => {
   });
 
   it("validates the finish contract and returns an accepted control result", async () => {
-    expect(finishTool.validate({ status: "success", summary: "done" }).ok).toBe(false);
+    expect(finishTool.validate({ status: "success" }).ok).toBe(true);
+    const minimal = await finishTool.execute(makeContext(), {
+      status: "success"
+    }, new AbortController().signal);
+    expect(minimal.status).toBe("ok");
+    expect(minimal.content).toContain('"summary":"Task completed."');
+    expect(minimal.content).toContain('"verification":"No verification details provided."');
+    expect(minimal.content).toContain('"remainingIssues":""');
+
     const result = await finishTool.execute(makeContext(), {
       status: "success",
       summary: "done",

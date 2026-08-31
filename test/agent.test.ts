@@ -292,6 +292,32 @@ describe("AgentLoop flow and tool batching", () => {
     expect(result.messages.at(-1)).toMatchObject({ role: "tool", toolCallId: "finish-call" });
     expect(result.messages.at(-1)?.content).toContain('"accepted":true');
   });
+
+  it("completes a direct answer in one request with a status-only finish call", async () => {
+    const provider = new ScriptedLlmProvider([
+      { response: assistant([call("finish-answer", "finish", { status: "success" })], "Here is the answer.") }
+    ]);
+    const result = await new AgentLoop({
+      provider,
+      tools: new ToolRegistry([finishTool]),
+      toolContext: makeContext()
+    }).run("What can you do?");
+
+    expect(result.terminalState).toBe("completed");
+    expect(result.reason).toBe("finish_success");
+    expect(result.finish).toEqual({
+      status: "success",
+      summary: "Task completed.",
+      verification: "No verification details provided.",
+      remainingIssues: ""
+    });
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.messages[0]).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("call the finish tool exactly once")
+    });
+    expect(result.messages.at(-1)?.content).toContain('"summary":"Task completed."');
+  });
 });
 
 describe("AgentLoop limits and cancellation", () => {
@@ -311,7 +337,7 @@ describe("AgentLoop limits and cancellation", () => {
     expect(result.terminalState).toBe("failed");
     expect(result.reason).toBe("protocol_error");
     expect(provider.requests).toHaveLength(3);
-    expect(result.messages.filter((message) => message.role === "user").map((message) => message.content)).toContain("Protocol reminder: use the provided tools for the task; successful completion requires calling the finish tool.");
+    expect(result.messages.filter((message) => message.role === "user").map((message) => message.content)).toContain("Protocol reminder: do not end this task with text alone. If the task is complete, call finish now; otherwise use the provided tools.");
     expect(result.limits.consecutiveNoFinishTurns).toBe(3);
   });
 

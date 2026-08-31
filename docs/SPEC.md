@@ -162,22 +162,22 @@
 8. 为每个 tool-call ID 保存对应 tool result。
 9. 普通工具完成后把结果发送给下一轮模型；合法 `finish` 写入结果后进入终态。
 
-模型只输出纯文本而未调用工具时，系统追加协议提醒并继续；连续 3 次仍未调用 `finish` 则失败。
+系统提示要求模型在每个用户请求的最终响应中调用一次 `finish`。普通问答可以在同一响应中输出文本并调用 `finish`，因此不需要额外的 LLM 回合。模型只输出纯文本而未调用工具时，系统追加协议提醒并继续；连续 3 次仍未调用 `finish` 则失败。
 
 ### 6.3 `finish`
 
-`finish` 必须是该次响应唯一的 tool call：
+`finish` 必须是该次响应唯一的 tool call；普通问答的文本可以和这个 tool call 同时返回：
 
-- `status`: `success | partial | failure`
-- `summary`: 非空完成摘要
-- `verification`: 非空验证说明；未验证时必须说明原因
-- `remainingIssues`: 遗留问题，无则为空字符串
+- `status`（必填）：`success | partial | failure`
+- `summary`（可选）：完成摘要；省略时由运行时按状态补默认摘要
+- `verification`（可选）：验证说明；省略时记录为未提供验证说明
+- `remainingIssues`（可选）：遗留问题；省略时按空字符串处理
 
 合法 `finish` 也必须生成 `accepted` tool result，以保证后续会话历史仍满足 Chat Completions 的 tool-call/result 配对要求。
 
 ### 6.4 限制
 
-- 每个用户任务最多 20 次 LLM 请求。
+- 每个用户任务最多 50 次 LLM 请求。
 - Agent 活跃时间最多 10 分钟，不包含等待审批时间。
 - 单次 LLM 请求最多 120 秒。
 - 单条命令最多 60 秒。

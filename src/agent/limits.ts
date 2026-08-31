@@ -1,6 +1,6 @@
 import type { ToolExecutionStatus } from "../tools/types.js";
 
-export const DEFAULT_MAX_LLM_REQUESTS = 20;
+export const DEFAULT_MAX_LLM_REQUESTS = 50;
 export const DEFAULT_MAX_ACTIVE_MS = 10 * 60 * 1_000;
 export const DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 export const DEFAULT_MAX_NO_FINISH_TURNS = 3;

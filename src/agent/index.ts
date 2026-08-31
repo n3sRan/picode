@@ -1,4 +1,5 @@
 export { AgentLoop, AgentLoopBusyError, PROTOCOL_REMINDER } from "./loop.js";
+export { DEFAULT_SYSTEM_MESSAGE } from "./prompt.js";
 export type {
   AgentEventListener,
   AgentLoopOptions,
