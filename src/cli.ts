@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -8,6 +8,7 @@ import { OpenAIChatProvider } from "./llm/openai-chat-provider.js";
 import type { LlmProvider } from "./llm/provider.js";
 import { loadConfig, readAllowedDotenv } from "./config.js";
 import { formatError } from "./security/redact.js";
+import { canonicalDirectory as resolveCanonicalDirectory } from "./fs-utils.js";
 import { SessionStore } from "./sessions/index.js";
 import { exitCodeForTerminalState, TerminalApp } from "./ui/index.js";
 
@@ -53,19 +54,16 @@ Interactive commands:
   /exit         Exit interactive mode.
 `;
 
-function canonicalDirectory(pathValue: string, label: string): string {
+function canonicalCliDirectory(pathValue: string, label: string): string {
   try {
-    if (!statSync(pathValue).isDirectory()) {
-      throw new Error("not a directory");
-    }
-    return realpathSync(pathValue);
+    return resolveCanonicalDirectory(pathValue);
   } catch {
     throw new CliUsageError(`${label} must be an existing directory: ${pathValue}`);
   }
 }
 
 export function parseCliArgs(args: readonly string[], startupDir = process.cwd()): CliOptions {
-  const canonicalStartupDir = canonicalDirectory(startupDir, "startup directory");
+  const canonicalStartupDir = canonicalCliDirectory(startupDir, "startup directory");
   let cwd = canonicalStartupDir;
   let help = false;
   let task: string | undefined;
@@ -88,7 +86,7 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
       if (rawPath === undefined || rawPath.startsWith("-")) {
         throw new CliUsageError("--cwd requires a path");
       }
-      cwd = canonicalDirectory(resolve(startupDir, rawPath), "--cwd");
+      cwd = canonicalCliDirectory(resolve(startupDir, rawPath), "--cwd");
       index += 2;
       continue;
     }
@@ -98,7 +96,7 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
       if (rawPath.length === 0) {
         throw new CliUsageError("--cwd requires a path");
       }
-      cwd = canonicalDirectory(resolve(startupDir, rawPath), "--cwd");
+      cwd = canonicalCliDirectory(resolve(startupDir, rawPath), "--cwd");
       index += 1;
       continue;
     }

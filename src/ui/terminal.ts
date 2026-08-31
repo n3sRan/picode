@@ -267,7 +267,7 @@ export class TerminalApp {
       messages: [...result.messages],
       usage: result.usage,
       task: {
-        state: result.state,
+        state: result.terminalState,
         terminalState: result.terminalState,
         reason: result.reason,
         message: result.message,

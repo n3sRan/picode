@@ -35,11 +35,13 @@ flowchart LR
 src/
   cli.ts
   config.ts
+  fs-utils.ts
   domain/
     events.ts
     messages.ts
     state.ts
     errors.ts
+    tool.ts
   llm/
     provider.ts
     openai-chat-provider.ts
@@ -254,11 +256,11 @@ MVP 不支持工作区外文件工具审批。用户若确有需要，只能主�
 
 list/search/read/write/edit 执行器必须拒绝 `.env` 和 `.env.*`，仅 `.env.example` 例外。该限制必须在执行层实现，不能只靠 UI 隐藏。
 
-配置模块只提取四个 `PICODE_*` 键；redactor 在 UI、错误和 session 保存前替换实际 API Key。
+配置模块只提取四个 `PICODE_*` 键；redactor 在 UI、错误和 session 保存前替换实际 API Key。递归 JSON 脱敏只处理值并保留对象键名，避免破坏工具参数名。
 
 ### 7.3 ApprovalBroker
 
-工具不直接读终端。`run_command` 向 `ApprovalBroker` 提交完整命令、cwd、超时和通用风险说明。CLI broker询问用户；测试 broker返回预设决定。
+工具不直接读终端。`run_command` 向 `ApprovalBroker` 提交完整命令、cwd、超时和通用风险说明。CLI broker询问用户；`ScriptedApprovalBroker` 返回预设决定。
 
 每次审批仅覆盖当前调用。non-TTY 环境默认拒绝。
 
@@ -297,7 +299,7 @@ workspace hash 基于 canonical path 的 SHA-256。session JSON保存元数据�
 
 ### 9.2 原子写入
 
-Session Store 写到同目录临时文件，关闭后 rename 替换正式文件。文件尽量设置为仅当前用户可读写。保存前执行 secret redaction，artifact 文件名由程序生成。
+Session Store 和文件/artifact 写入共用 `fs-utils.ts` 的同目录临时文件 + rename 原子替换 helper。文件尽量设置为仅当前用户可读写。保存前执行 secret redaction，artifact 文件名由程序生成。
 
 ### 9.3 基本恢复
 

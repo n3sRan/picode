@@ -1,15 +1,9 @@
 import type { JsonObject } from "../domain/messages.js";
+import type { ToolExecutionStatus } from "../domain/tool.js";
 import type { ApprovalBroker } from "../security/approval.js";
 import type { PathPolicy } from "../security/path-policy.js";
 
-export type ToolExecutionStatus =
-  | "ok"
-  | "error"
-  | "permission_denied"
-  | "aborted"
-  | "timeout"
-  | "interrupted"
-  | "batch_rejected";
+export type { ToolExecutionStatus } from "../domain/tool.js";
 
 export interface ToolResult {
   status: ToolExecutionStatus;

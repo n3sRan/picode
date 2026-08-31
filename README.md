@@ -33,7 +33,7 @@ Phase 3 的 `AgentLoop` 显式推进 context check → LLM → tool-call 预验�
 
 Phase 4 的 session 数据保存在用户目录 `~/.picode/projects/<workspace-hash>/`，不污染工作区；快照使用同目录临时文件加 rename 原子替换。工具执行前写入 pending marker，恢复时对未完成调用补安全结果并提示副作用状态未知，绝不自动重放；CLI 支持 `/new`、`/sessions`、`/resume` 和 `/exit`。
 
-Phase 6 当前完成 CLI UI 重构：assistant 文本、工具调用/结果、审批、usage、warning 和终态使用独立标签与分块展示；TTY 输出使用语义 ANSI 颜色，重定向或管道输出保持稳定的无颜色文本。
+Phase 6 当前完成 CLI UI 重构、限制与文件搜索边界加固及基础结构清理：assistant 文本、工具调用/结果、审批、usage、warning 和终态使用独立标签与分块展示；TTY 输出使用语义 ANSI 颜色，重定向或管道输出保持稳定的无颜色文本。
 
 ## CLI
 

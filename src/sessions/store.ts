@@ -1,21 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
-  realpathSync,
-  statSync,
-  unlinkSync,
   writeFileSync
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import type { LlmFinishReason, LlmUsage, Message } from "../domain/messages.js";
 import type { AgentState, TerminalState, TerminationReason } from "../domain/state.js";
 import type { LimitSnapshot } from "../agent/limits.js";
-import { redactSecrets } from "../security/redact.js";
+import { atomicWrite, canonicalDirectory } from "../fs-utils.js";
+import { redactValue } from "../security/redact.js";
 
 export const SESSION_SCHEMA_VERSION = 1;
 export const DEFAULT_SESSION_ROOT = join(homedir(), ".picode");
@@ -219,33 +215,16 @@ function isPendingToolSnapshot(value: unknown): boolean {
   );
 }
 
-function redactValue(value: unknown, secrets: readonly (string | undefined)[]): unknown {
-  if (typeof value === "string") {
-    return redactSecrets(value, secrets);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactValue(item, secrets));
-  }
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [redactSecrets(key, secrets), redactValue(item, secrets)])
-    );
-  }
-  return value;
-}
-
 function atomicWriteJson(filePath: string, value: unknown): void {
-  const directory = dirname(filePath);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const temporaryPath = join(directory, "." + basename(filePath) + "." + randomUUID() + ".tmp");
-  let renamed = false;
   try {
-    writeFileSync(temporaryPath, JSON.stringify(value, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600
-    });
-    renameSync(temporaryPath, filePath);
-    renamed = true;
+    atomicWrite(
+      filePath,
+      (temporaryPath) => writeFileSync(temporaryPath, JSON.stringify(value, null, 2) + "\n", {
+        encoding: "utf8",
+        mode: 0o600
+      }),
+      { ensureParent: true }
+    );
   } catch (error) {
     throw new SessionStoreError(
       "Unable to atomically write session file: " +
@@ -253,10 +232,6 @@ function atomicWriteJson(filePath: string, value: unknown): void {
         ": " +
         (error instanceof Error ? error.message : String(error))
     );
-  } finally {
-    if (!renamed && existsSync(temporaryPath)) {
-      unlinkSync(temporaryPath);
-    }
   }
 }
 
@@ -311,16 +286,11 @@ export class SessionStore {
   private readonly now: () => Date;
 
   public constructor(options: SessionStoreOptions) {
-    let canonicalWorkspaceRoot: string;
     try {
-      if (!statSync(options.workspaceRoot).isDirectory()) {
-        throw new Error("not a directory");
-      }
-      canonicalWorkspaceRoot = realpathSync(options.workspaceRoot);
+      this.workspaceRoot = canonicalDirectory(options.workspaceRoot);
     } catch {
       throw new SessionStoreError("Workspace is not a directory: " + options.workspaceRoot);
     }
-    this.workspaceRoot = canonicalWorkspaceRoot;
     this.rootDir = options.rootDir ?? DEFAULT_SESSION_ROOT;
     this.workspaceDirectory = join(this.rootDir, "projects", workspaceHash(this.workspaceRoot));
     this.sessionsDirectory = join(this.workspaceDirectory, "sessions");

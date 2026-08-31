@@ -1,6 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { atomicWrite } from "../fs-utils.js";
 import { redactSecrets } from "../security/redact.js";
 
 export const DEFAULT_TOOL_OUTPUT_LIMIT = 12_000;
@@ -41,7 +42,9 @@ export function summarizeText(text: string, options: TextSummaryOptions): TextSu
     artifactPath = createArtifactPath(options.spillDirectory, options.artifactPrefix);
     // The text is redacted before it is persisted, so the artifact cannot leak
     // a configured API key through a large output path.
-    writeFileSync(artifactPath, redactedText, { encoding: "utf8", mode: 0o600 });
+    atomicWrite(artifactPath, (temporaryPath) => {
+      writeFileSync(temporaryPath, redactedText, { encoding: "utf8", mode: 0o600 });
+    });
   } catch {
     artifactPath = undefined;
   }

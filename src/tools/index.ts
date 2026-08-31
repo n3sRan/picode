@@ -20,7 +20,7 @@ export { editFileTool } from "./edit-file.js";
 export { runCommandTool, NodeShellRunner, DEFAULT_COMMAND_TIMEOUT_MS, riskNoteForCommand, buildCommandEnvironment } from "./run-command.js";
 export { finishTool } from "./finish.js";
 export { PathPolicy, PathPolicyError } from "../security/path-policy.js";
-export { CliApprovalBroker, TestApprovalBroker, formatApprovalPrompt } from "../security/approval.js";
+export { CliApprovalBroker, ScriptedApprovalBroker, formatApprovalPrompt } from "../security/approval.js";
 
 import { ToolRegistry } from "./registry.js";
 import { editFileTool } from "./edit-file.js";

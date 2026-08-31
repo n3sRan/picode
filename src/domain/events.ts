@@ -1,14 +1,8 @@
 import type { AssistantMessage, LlmUsage, ToolCall } from "./messages.js";
 import type { AgentState, TerminalState, TerminationReason } from "./state.js";
+import type { ToolExecutionStatus } from "./tool.js";
 
-export type ToolExecutionStatus =
-  | "ok"
-  | "error"
-  | "permission_denied"
-  | "aborted"
-  | "timeout"
-  | "interrupted"
-  | "batch_rejected";
+export type { ToolExecutionStatus } from "./tool.js";
 
 export type AgentEvent =
   | { type: "state_changed"; state: AgentState }

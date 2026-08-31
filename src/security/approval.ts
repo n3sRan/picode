@@ -19,7 +19,8 @@ export interface CliApprovalBrokerOptions {
   question?: (prompt: string, signal?: AbortSignal) => Promise<string>;
 }
 
-export class TestApprovalBroker implements ApprovalBroker {
+/** Deterministic approval broker for embedding and tests. */
+export class ScriptedApprovalBroker implements ApprovalBroker {
   public readonly requests: ApprovalRequest[] = [];
   private readonly decisions: boolean[];
   private readonly defaultDecision: boolean;

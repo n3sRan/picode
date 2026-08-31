@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, relative } from "node:path";
 import { PathPolicyError } from "../security/path-policy.js";
+import { atomicWrite } from "../fs-utils.js";
 import type { ToolResult } from "./types.js";
 import { MAX_FILE_BYTES } from "./output.js";
 
@@ -49,20 +49,7 @@ export function ensureParentDirectory(pathValue: string): void {
 
 /** Writes through a same-directory temporary file and rename. */
 export function atomicWriteFile(pathValue: string, contents: string): void {
-  const directory = dirname(pathValue);
-  const temporaryPath = `${joinTemporaryName(directory)}.tmp`;
-  let renamed = false;
-  try {
+  atomicWrite(pathValue, (temporaryPath) => {
     writeFileSync(temporaryPath, contents, { encoding: "utf8", mode: 0o600 });
-    renameSync(temporaryPath, pathValue);
-    renamed = true;
-  } finally {
-    if (!renamed && existsSync(temporaryPath)) {
-      unlinkSync(temporaryPath);
-    }
-  }
-}
-
-function joinTemporaryName(directory: string): string {
-  return join(directory, `.picode-write-${randomUUID()}`);
+  });
 }

@@ -163,6 +163,7 @@ describe("slash commands and terminal task lifecycle", () => {
     const saved = store.load(session.id);
 
     expect(result.terminalState).toBe("completed");
+    expect(result).not.toHaveProperty("state");
     expect(saved.task).toMatchObject({
       state: "completed",
       terminalState: "completed",

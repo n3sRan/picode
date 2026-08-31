@@ -1,4 +1,4 @@
-import type { ToolExecutionStatus } from "../tools/types.js";
+import type { ToolExecutionStatus } from "../domain/tool.js";
 
 export const DEFAULT_MAX_LLM_REQUESTS = 30;
 export const DEFAULT_MAX_ACTIVE_MS = 10 * 60 * 1_000;

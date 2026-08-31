@@ -14,7 +14,7 @@ import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CliApprovalBroker, TestApprovalBroker } from "../src/security/approval.js";
+import { CliApprovalBroker, ScriptedApprovalBroker } from "../src/security/approval.js";
 import { DEFAULT_SESSION_TEMP_ROOT, PathPolicy, PathPolicyError } from "../src/security/path-policy.js";
 import { atomicWriteFile } from "../src/tools/file-utils.js";
 import {
@@ -56,7 +56,7 @@ function makeContext(): ToolExecutionContext & { workspace: string; session: str
     sessionId: "test-session",
     sessionTmpDir: session,
     pathPolicy,
-    approvalBroker: new TestApprovalBroker(),
+    approvalBroker: new ScriptedApprovalBroker(),
     workspace,
     session
   };
@@ -347,7 +347,7 @@ const completedShellResult: ShellRunResult = {
 describe("approval and command tools", () => {
   it("requests every command approval and never executes a denied command", async () => {
     const allowedContext = makeContext();
-    const allowedBroker = new TestApprovalBroker([true]);
+    const allowedBroker = new ScriptedApprovalBroker([true]);
     const allowedRunner = new FakeShellRunner(completedShellResult);
     allowedContext.approvalBroker = allowedBroker;
     allowedContext.shellRunner = allowedRunner;
@@ -359,7 +359,7 @@ describe("approval and command tools", () => {
     expect(allowedRunner.requests[0]?.env.PICODE_API_KEY).toBeUndefined();
 
     const deniedContext = makeContext();
-    const deniedBroker = new TestApprovalBroker([false]);
+    const deniedBroker = new ScriptedApprovalBroker([false]);
     const deniedRunner = new FakeShellRunner(completedShellResult);
     deniedContext.approvalBroker = deniedBroker;
     deniedContext.shellRunner = deniedRunner;

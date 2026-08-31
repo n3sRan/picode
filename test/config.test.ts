@@ -9,7 +9,7 @@ import {
   loadConfig,
   readAllowedDotenv
 } from "../src/config.js";
-import { formatError, REDACTED_VALUE, redactSecrets } from "../src/security/redact.js";
+import { formatError, REDACTED_VALUE, redactSecrets, redactValue } from "../src/security/redact.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -105,5 +105,14 @@ describe("loadConfig", () => {
 
     expect(redactSecrets(source, [secret])).toBe(`request failed: ${REDACTED_VALUE}`);
     expect(formatError(new Error(source), [secret])).not.toContain(secret);
+  });
+
+  it("redacts JSON values without changing object keys", () => {
+    const secret = "credential-value-that-must-not-leak";
+
+    expect(redactValue({ [secret]: secret, nested: { value: secret } }, [secret])).toEqual({
+      [secret]: REDACTED_VALUE,
+      nested: { value: REDACTED_VALUE }
+    });
   });
 });

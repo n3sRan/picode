@@ -8,11 +8,12 @@ import type {
   ToolResultMessage,
   UserMessage
 } from "../domain/messages.js";
+import type { ToolExecutionStatus } from "../domain/tool.js";
 import type { AgentState, TerminalState, TerminationReason } from "../domain/state.js";
 import { LlmProviderError, normalizeLlmProviderError } from "../domain/errors.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { ApprovalBroker, ApprovalRequest } from "../security/approval.js";
-import { redactSecrets } from "../security/redact.js";
+import { redactSecrets, redactValue } from "../security/redact.js";
 import { BudgetTracker, type ContextBudgetDecision } from "../context/budget.js";
 import {
   ActiveTimeTracker,
@@ -35,7 +36,6 @@ import { ToolRegistry } from "../tools/registry.js";
 import type {
   ToolDefinition,
   ToolExecutionContext,
-  ToolExecutionStatus,
   ToolResult
 } from "../tools/types.js";
 import { formatValidationIssues } from "../tools/validators.js";
@@ -67,7 +67,6 @@ export interface AgentLoopOptions {
 
 export interface AgentRunResult {
   terminalState: TerminalState;
-  state: TerminalState;
   reason: TerminationReason;
   message: string;
   messages: readonly Message[];
@@ -138,23 +137,8 @@ function safeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Tool execution failed.";
 }
 
-function redactJsonValue(value: unknown, redact: (text: string) => string): unknown {
-  if (typeof value === "string") {
-    return redact(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactJsonValue(item, redact));
-  }
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [redact(key), redactJsonValue(item, redact)])
-    );
-  }
-  return value;
-}
-
-function safeToolCall(call: ToolCall, redact: (text: string) => string): ToolCall {
-  const safeArguments = redactJsonValue(call.arguments, redact) as JsonObject;
+function safeToolCall(call: ToolCall, secrets: readonly (string | undefined)[]): ToolCall {
+  const safeArguments = redactValue(call.arguments, secrets) as JsonObject;
   return {
     ...call,
     rawArguments: JSON.stringify(safeArguments),
@@ -162,11 +146,14 @@ function safeToolCall(call: ToolCall, redact: (text: string) => string): ToolCal
   };
 }
 
-function safeAssistantMessage(message: AssistantMessage, redact: (text: string) => string): AssistantMessage {
+function safeAssistantMessage(
+  message: AssistantMessage,
+  secrets: readonly (string | undefined)[]
+): AssistantMessage {
   return {
     ...message,
-    content: redact(message.content),
-    toolCalls: message.toolCalls.map((call) => safeToolCall(call, redact))
+    content: redactSecrets(message.content, secrets),
+    toolCalls: message.toolCalls.map((call) => safeToolCall(call, secrets))
   };
 }
 
@@ -320,7 +307,10 @@ export class AgentLoop {
 
       const promptMessages = [...this.messages];
       const assistantMessage = response.message;
-      const safeAssistant = safeAssistantMessage(assistantMessage, (value) => this.redact(value));
+      const safeAssistant = safeAssistantMessage(
+        assistantMessage,
+        this.baseToolContext.redactionSecrets ?? []
+      );
       this.messages.push(safeAssistant);
       this.emit({
         type: "assistant_message_completed",
@@ -365,7 +355,10 @@ export class AgentLoop {
 
       this.limits.recordToolTurn();
       for (const toolCall of assistantMessage.toolCalls) {
-        this.emit({ type: "tool_requested", toolCall: safeToolCall(toolCall, (value) => this.redact(value)) });
+        this.emit({
+          type: "tool_requested",
+          toolCall: safeToolCall(toolCall, this.baseToolContext.redactionSecrets ?? [])
+        });
       }
 
       const validation = this.validateBatch(assistantMessage.toolCalls);
@@ -661,7 +654,6 @@ export class AgentLoop {
     this.emit({ type: "agent_terminated", state, reason, message: eventMessage });
     return {
       terminalState: state,
-      state,
       reason,
       message: eventMessage,
       messages: [...this.messages],

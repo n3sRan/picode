@@ -7,7 +7,7 @@ import { BudgetTracker } from "../src/context/index.js";
 import type { AssistantMessage, JsonObject, LlmUsage, Message, ToolCall } from "../src/domain/messages.js";
 import type { LlmProvider, LlmRequest, LlmResponse } from "../src/llm/provider.js";
 import { ScriptedLlmProvider } from "../src/llm/provider.js";
-import { TestApprovalBroker, type ApprovalBroker, type ApprovalRequest } from "../src/security/approval.js";
+import { ScriptedApprovalBroker, type ApprovalBroker, type ApprovalRequest } from "../src/security/approval.js";
 import { PathPolicy } from "../src/security/path-policy.js";
 import { createBuiltinToolRegistry } from "../src/tools/index.js";
 import { finishTool } from "../src/tools/finish.js";
@@ -31,7 +31,7 @@ function temporaryDirectory(prefix: string): string {
   return directory;
 }
 
-function makeContext(approvalBroker: ApprovalBroker = new TestApprovalBroker()): ToolExecutionContext & { workspace: string; session: string } {
+function makeContext(approvalBroker: ApprovalBroker = new ScriptedApprovalBroker()): ToolExecutionContext & { workspace: string; session: string } {
   const workspace = temporaryDirectory("picode-agent-workspace-");
   const session = temporaryDirectory("picode-agent-session-");
   const pathPolicy = new PathPolicy({
@@ -154,7 +154,7 @@ class AdvancingApprovalBroker implements ApprovalBroker {
 
 describe("AgentLoop flow and tool batching", () => {
   it("completes the scripted read-edit-command-finish flow and preserves tool pairs", async () => {
-    const context = makeContext(new TestApprovalBroker([true]));
+    const context = makeContext(new ScriptedApprovalBroker([true]));
     writeFileSync(join(context.workspace, "bug.txt"), "old value\n");
     const shellRunner = new FakeShellRunner();
     context.shellRunner = shellRunner;

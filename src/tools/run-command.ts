@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import { redactSecrets } from "../security/redact.js";
-import { TestApprovalBroker, type ApprovalRequest } from "../security/approval.js";
+import type { ApprovalRequest } from "../security/approval.js";
 import type {
   ShellRunRequest,
   ShellRunResult,
@@ -315,7 +315,3 @@ export const runCommandTool: ToolDefinition<RunCommandArgs> = {
     }
   }
 };
-
-// A named default makes it convenient for callers that want a safe broker in a
-// minimal composition without accidentally granting shell permissions.
-export const denyAllApprovalBroker = new TestApprovalBroker();

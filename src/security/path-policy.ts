@@ -1,5 +1,6 @@
 import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { canonicalDirectory } from "../fs-utils.js";
 
 export type AllowedPathRoot = "workspace" | "session_tmp";
 export type PathOperation = "read" | "write" | "list" | "search";
@@ -88,10 +89,13 @@ function nearestExistingParent(pathValue: string): { path: string; remaining: st
 export class PathPolicy {
   public readonly workspaceRoot: string;
   public readonly sessionTmpDir: string;
-  private readonly sessionTmpRoot: string;
 
   public constructor(options: PathPolicyOptions) {
-    this.workspaceRoot = this.canonicalDirectory(options.workspaceRoot, "workspace", "invalid_workspace");
+    try {
+      this.workspaceRoot = canonicalDirectory(options.workspaceRoot);
+    } catch {
+      throw new PathPolicyError("invalid_workspace", `Invalid workspace directory: ${options.workspaceRoot}`, options.workspaceRoot);
+    }
 
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(options.sessionId)) {
       throw new PathPolicyError("invalid_session_tmp", "Invalid session ID", options.sessionId);
@@ -107,7 +111,6 @@ export class PathPolicy {
     } catch {
       throw new PathPolicyError("invalid_session_tmp", `Invalid session temp directory: ${requestedSessionDir}`, requestedSessionDir);
     }
-    this.sessionTmpRoot = this.sessionTmpDir;
   }
 
   public resolvePath(pathValue: string, operation: PathOperation = "read"): ResolvedPath {
@@ -171,33 +174,13 @@ export class PathPolicy {
     return this.resolvePath(pathValue, "write");
   }
 
-  public isProtectedPath(pathValue: string, rootPath?: string): boolean {
-    const selectedRoot = rootPath ?? this.rootFor(pathValue)?.path;
-    return selectedRoot === undefined ? false : hasProtectedSegment(selectedRoot, pathValue);
-  }
-
   private rootFor(pathValue: string): { kind: AllowedPathRoot; path: string } | undefined {
     if (pathIsInside(this.workspaceRoot, pathValue)) {
       return { kind: "workspace", path: this.workspaceRoot };
     }
-    if (pathIsInside(this.sessionTmpRoot, pathValue)) {
-      return { kind: "session_tmp", path: this.sessionTmpRoot };
+    if (pathIsInside(this.sessionTmpDir, pathValue)) {
+      return { kind: "session_tmp", path: this.sessionTmpDir };
     }
     return undefined;
-  }
-
-  private canonicalDirectory(
-    pathValue: string,
-    label: string,
-    errorCode: "invalid_workspace" | "invalid_session_tmp"
-  ): string {
-    try {
-      if (!statSync(pathValue).isDirectory()) {
-        throw new Error("not a directory");
-      }
-      return realpathSync(pathValue);
-    } catch {
-      throw new PathPolicyError(errorCode, `Invalid ${label} directory: ${pathValue}`, pathValue);
-    }
   }
 }
