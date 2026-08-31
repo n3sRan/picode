@@ -71,6 +71,7 @@ src/
   ui/
     terminal.ts
     commands.ts
+    renderer.ts
 test/
   unit/
   integration/
@@ -313,13 +314,15 @@ MVP 不通过事件日志精确重建 tool-call/result，不承诺从任意写�
 
 ## 10. CLI/TUI
 
-使用 Node `readline` 和少量 ANSI 样式。UI只负责：
+使用 Node `readline` 和独立的 `TerminalRenderer`。UI只负责：
 
 - 参数和 slash command 解析；
-- 流事件显示；
+- 把 `AgentEvent` 渲染为可区分的终端区块；
 - 命令审批；
 - Ctrl+C 转换为 AbortSignal；
 - session、usage warning 和终态展示。
+
+`TerminalRenderer` 不改变 Agent 状态或执行工具。assistant 流式文本以独立区块输出；工具调用、工具结果、审批、usage、warning 和终态使用不同标签、间距和语义颜色。颜色只在 TTY 中启用，非 TTY 输出不包含 ANSI 控制序列，便于日志和管道消费。工具参数和结果摘要在展示层截断，避免单条输出占满终端。
 
 UI不直接执行工具、修改 model context 或写 session。Agent busy 时拒绝新的普通输入；审批输入由 Approval Broker独占，避免与主 prompt 竞争 stdin。
 

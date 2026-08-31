@@ -1,6 +1,6 @@
 # picode
 
-`picode` 是一个从零实现的 TypeScript Coding Agent。当前仓库已完成 Phase 0-5：项目脚手架、配置解析、密钥脱敏、LLM 内部协议/provider 抽象、工具参数校验、路径边界、文件工具、命令审批、显式 Agent Loop、终止限制、上下文预算保护、原子会话快照、CLI 任务/交互入口和真实 API 隔离 E2E 验证。
+`picode` 是一个从零实现的 TypeScript Coding Agent。当前仓库已完成 Phase 0-5，并正在进行 Phase 6 增强：项目脚手架、配置解析、密钥脱敏、LLM 内部协议/provider 抽象、工具参数校验、路径边界、文件工具、命令审批、显式 Agent Loop、终止限制、上下文预算保护、原子会话快照、CLI 任务/交互入口和真实 API 隔离 E2E 验证。
 
 ## 环境
 
@@ -32,6 +32,8 @@ Phase 2 的文件工具只访问 canonical workspace 和当前 session 的 `/tmp
 Phase 3 的 `AgentLoop` 显式推进 context check → LLM → tool-call 预验证 → 严格串行工具执行 → result feedback，要求模型通过唯一的 `finish` 工具结束任务，并执行请求数、活跃时间、连续错误、重复调用、取消和上下文预算限制。默认 system prompt 要求普通问答也在同一响应调用 `finish`；`finish` 仅要求 `status`，摘要、验证和遗留问题字段可选。审批等待不计入活跃时间，工具批次在执行前整体校验。
 
 Phase 4 的 session 数据保存在用户目录 `~/.picode/projects/<workspace-hash>/`，不污染工作区；快照使用同目录临时文件加 rename 原子替换。工具执行前写入 pending marker，恢复时对未完成调用补安全结果并提示副作用状态未知，绝不自动重放；CLI 支持 `/new`、`/sessions`、`/resume` 和 `/exit`。
+
+Phase 6 当前完成 CLI UI 重构：assistant 文本、工具调用/结果、审批、usage、warning 和终态使用独立标签与分块展示；TTY 输出使用语义 ANSI 颜色，重定向或管道输出保持稳定的无颜色文本。
 
 ## CLI
 

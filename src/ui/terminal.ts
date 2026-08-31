@@ -1,6 +1,5 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
-import type { AgentEvent } from "../domain/events.js";
 import type { AgentRunResult, ToolExecutionCheckpoint } from "../agent/index.js";
 import { AgentLoop } from "../agent/index.js";
 import type { PicodeConfig } from "../config.js";
@@ -17,6 +16,7 @@ import {
 } from "../sessions/index.js";
 import { CliCommandError, parseCliCommand, type CliCommand } from "./commands.js";
 import type { LlmProvider } from "../llm/provider.js";
+import { TerminalRenderer } from "./renderer.js";
 
 export interface TerminalAppOptions {
   workspaceRoot: string;
@@ -57,6 +57,7 @@ export class TerminalApp {
   private readonly output: Writable;
   private readonly errorOutput: Writable;
   private readonly isInteractive: boolean;
+  private readonly renderer: TerminalRenderer;
   private currentSession: SessionSnapshot | undefined;
   private busy = false;
   private exiting = false;
@@ -75,6 +76,10 @@ export class TerminalApp {
     this.isInteractive = options.isInteractive ??
       ((this.input as Readable & { isTTY?: boolean }).isTTY === true &&
         (this.output as Writable & { isTTY?: boolean }).isTTY === true);
+    this.renderer = new TerminalRenderer({
+      output: this.output,
+      errorOutput: this.errorOutput
+    });
   }
 
   public getSession(): SessionSnapshot | undefined {
@@ -101,6 +106,7 @@ export class TerminalApp {
     }
     const session = await this.initialize();
     this.busy = true;
+    this.renderer.beginTask();
     const controller = new AbortController();
     this.activeAbort = controller;
     const onExternalAbort = () => controller.abort(signal?.reason);
@@ -143,7 +149,7 @@ export class TerminalApp {
         toolContext,
         initialMessages,
         contextWindow: this.config.contextWindow,
-        onEvent: (event) => this.renderEvent(event),
+        onEvent: (event) => this.renderer.render(event),
         beforeToolExecution: (call, checkpoint) => this.savePendingTool(call, checkpoint),
         afterToolExecution: (call, result, checkpoint) =>
           this.saveToolResult(call, result, checkpoint)
@@ -165,7 +171,7 @@ export class TerminalApp {
 
   public async runInteractive(): Promise<number> {
     await this.initialize();
-    this.write("picode session " + this.shortSessionId() + " (" + this.currentSession!.name + ")\n");
+    this.renderer.renderSessionHeader(this.shortSessionId(), this.currentSession!.name);
     try {
       while (!this.exiting) {
         const line = await this.readLine();
@@ -203,7 +209,7 @@ export class TerminalApp {
           return;
         case "new_session":
           this.currentSession = this.sessionStore.create(command.name);
-          this.write("Created session " + this.shortSessionId() + ".\n");
+          this.renderer.renderInfo("Created session " + this.shortSessionId() + ".");
           return;
         case "list_sessions":
           this.writeSessionList();
@@ -211,11 +217,11 @@ export class TerminalApp {
         case "resume_session":
           this.currentSession = this.sessionStore.load(command.identifier);
           this.recoverCurrentSession();
-          this.write("Resumed session " + this.shortSessionId() + ".\n");
+          this.renderer.renderInfo("Resumed session " + this.shortSessionId() + ".");
           return;
         case "exit":
           this.exiting = true;
-          this.write("Goodbye.\n");
+          this.renderer.renderInfo("Goodbye.");
           return;
       }
     } catch (error) {
@@ -313,49 +319,19 @@ export class TerminalApp {
   private writeSessionList(): void {
     const sessions = this.sessionStore.list();
     if (sessions.length === 0) {
-      this.write("No sessions.\n");
+      this.renderer.renderInfo("No sessions.");
       return;
     }
     for (const session of sessions) {
-      this.write(
+      this.renderer.renderInfo(
         session.id.slice(0, 8) +
           "  " +
           session.name +
           "  " +
           session.updatedAt +
           (session.pendingTool === undefined ? "" : "  pending:" + session.pendingTool.toolName) +
-          "\n"
+          ""
       );
-    }
-  }
-
-  private renderEvent(event: AgentEvent): void {
-    switch (event.type) {
-      case "assistant_text_delta":
-        this.write(event.delta);
-        return;
-      case "llm_usage_received":
-        this.write(
-          "\n[usage] prompt_tokens=" +
-            event.usage.promptTokens +
-            (event.usage.totalTokens === undefined ? "" : " total_tokens=" + event.usage.totalTokens) +
-            "\n"
-        );
-        return;
-      case "tool_requested":
-        this.write("\n[tool] " + event.toolCall.name + " (" + event.toolCall.id + ")\n");
-        return;
-      case "tool_completed":
-        this.write("[tool result] " + event.toolCallId + " " + event.status + ": " + event.summary + "\n");
-        return;
-      case "context_warning":
-        this.writeError(event.message + " (" + Math.round(event.ratio * 100) + "%)");
-        return;
-      case "agent_terminated":
-        this.write("\n[" + event.state + "] " + event.message + "\n");
-        return;
-      default:
-        return;
     }
   }
 
@@ -369,7 +345,7 @@ export class TerminalApp {
       return await this.readNextLine("picode> ", this.output, controller.signal);
     } catch {
       if (controller.signal.aborted) {
-        this.write("^C\n");
+        this.renderer.renderInfo("^C");
         return "";
       }
       return undefined;
@@ -455,11 +431,7 @@ export class TerminalApp {
     return this.currentSession!.id.slice(0, 8);
   }
 
-  private write(chunk: string): void {
-    this.output.write(chunk);
-  }
-
   private writeError(message: string): void {
-    this.errorOutput.write("picode: " + message + "\n");
+    this.renderer.renderError(message);
   }
 }
