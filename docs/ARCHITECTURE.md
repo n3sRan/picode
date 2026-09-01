@@ -141,9 +141,12 @@ UI消费以下实时事件：
 - `approval_resolved`
 - `tool_completed`
 - `context_warning`
+- `context_usage`
+- `context_compaction_started`
+- `context_compacted`
 - `agent_terminated`
 
-MVP 事件用于模块通信和测试，不单独写 append-only event log。
+MVP 事件用于模块通信和测试，不单独写 append-only event log；上面新增的上下文事件属于后续扩展设计。
 
 ## 5. OpenAI Chat Adapter
 
@@ -192,6 +195,10 @@ stateDiagram-v2
     executing_tool --> recording_results
     recording_results --> executing_tool: next serial tool
     recording_results --> preparing_context: normal batch complete
+    preparing_context --> compacting_context: auto threshold reached
+    compacting_context --> preparing_context: compacted and rechecked
+    compacting_context --> preparing_context: no progress below hard stop
+    compacting_context --> limit_reached: still at/above hard stop
     recording_results --> completed: finish success recorded
     recording_results --> partial: finish partial recorded
     recording_results --> failed: finish failure recorded
@@ -256,7 +263,7 @@ MVP 不支持工作区外文件工具审批。用户若确有需要，只能主�
 
 list/search/read/write/edit 执行器必须拒绝 `.env` 和 `.env.*`，仅 `.env.example` 例外。该限制必须在执行层实现，不能只靠 UI 隐藏。
 
-配置模块只提取六个 `PICODE_*` 键，并提供模型、上下文窗口、单次输出长度和任务请求上限的默认值；redactor 在 UI、错误和 session 保存前替换实际 API Key。递归 JSON 脱敏只处理值并保留对象键名，避免破坏工具参数名。
+当前配置模块只提取六个 `PICODE_*` 键，并提供模型、上下文窗口、单次输出长度和任务请求上限的默认值；上下文增强阶段将增加自动压缩开关和阈值两个 allowlisted 键。redactor 在 UI、错误和 session 保存前替换实际 API Key。递归 JSON 脱敏只处理值并保留对象键名，避免破坏工具参数名。
 
 ### 7.3 ApprovalBroker
 
@@ -283,6 +290,66 @@ MVP 不实现自动 compaction，避免引入摘要正确性和恢复语义。
 - usage 缺失：对完整当前 context 做一次保守字符估算并警告。
 
 估算器包含固定消息/tool schema 开销，但不声称是 tokenizer。这个模块以后可以扩展为 usage anchor + automatic compaction，而无需修改 Agent Loop 的主要边界。
+
+### 8.1 下一批：上下文计量与压缩
+
+以下是已确认但尚未实现的扩展设计；第 8 节的 75% warning、90% stop 是关闭自动压缩时的兼容基线。
+
+`BudgetTracker` 增加当前上下文度量接口，返回：
+
+```text
+ContextUsage {
+  estimatedTokens: number
+  ratio: number
+  contextWindow: number
+  source: "usage_anchor" | "fallback_estimate"
+}
+```
+
+`measureCurrent(messages, tools)` 使用和下一次普通请求相同的消息与 tool schema 输入。若存在最近一次真实 `prompt_tokens`，计算为该锚点加锚点之后新增序列化内容的保守估算；压缩或恢复后锚点失效，必须从新消息重新估算，不能沿用已不匹配的 usage。`source` 用于 UI 明确区分真实 usage 锚点和 fallback 估算。
+
+合法 `finish` 的执行路径变为：
+
+```mermaid
+flowchart TD
+    A[finish validated] --> B[append accepted tool result]
+    B --> C[persist safe checkpoint]
+    C --> D[measure current messages + tools]
+    D --> E[emit context_usage]
+    E --> F[emit agent_terminated with same usage]
+    F --> G[renderer appends metric to terminal block]
+```
+
+这样 terminal renderer 可以在 `[completed]`、`[partial]` 或 `[failed]` 区块末尾输出 `estimatedTokens`、百分比和估算来源。度量不触发新的模型请求；它反映的是已经包含 `finish` result 的当前历史。
+
+新增 `ContextCompactor`，负责选择安全裁剪边界、调用摘要模型和组合新消息。它不执行工具，摘要请求不传入 tool definitions，也不要求 `finish`。摘要输出通过 API Key 脱敏和普通文本校验后，包装为带历史摘要标记的 synthetic assistant message（`role=assistant`、`toolCalls=[]`、`finishReason=stop`）；标记用于提醒后续模型这是历史上下文，不是新的用户任务。
+
+裁剪策略遵守以下不变量：
+
+- 初始 system message 永远保留；
+- current user task 和继续任务所需的最近消息尾部保留；
+- assistant tool call 及其 tool results 以完整消息组为单位处理；
+- 摘要请求成功且新消息列表验证通过后，才替换内存上下文并原子保存；
+- no-op、超时、取消、无进展或保存失败均保留原消息，不生成半压缩快照。
+
+自动路径只在 `preparing_context`、普通请求发送前触发：
+
+```mermaid
+flowchart TD
+    A[before normal request] --> B[BudgetTracker estimate]
+    B -->|auto off or below threshold| C[send normal LLM request]
+    B -->|auto on and threshold reached| D[compacting_context]
+    D --> E[ContextCompactor, no tools]
+    E --> F{new estimate below auto threshold?}
+    F -->|yes| G[replace messages, clear anchor, recheck]
+    G --> C
+    F -->|no progress, failure, or still above threshold| H[retain original context]
+    H --> I{existing stop rule}
+    I -->|below stop| C
+    I -->|at/above stop| J[limit_reached]
+```
+
+自动压缩请求占用当前任务的一个 LLM request slot，并受活跃时间、取消信号和 120 秒请求超时保护。压缩无进展时必须记录结果，不能在同一份历史上无限重试。显式 `/compact` 由 `TerminalApp` 在 idle 状态委托同一个 `ContextCompactor`；busy 时仍由 UI 层拒绝，renderer 只展示结果，不直接修改消息或 session。
 
 ## 9. Session Store
 
@@ -314,6 +381,8 @@ Session Store 和文件/artifact 写入共用 `fs-utils.ts` 的同目录临时�
 
 MVP 不通过事件日志精确重建 tool-call/result，不承诺从任意写入点无损恢复。
 
+上下文压缩使用同一套原子 session store。摘要请求期间不替换旧快照；只有新消息列表和压缩后度量都成功后才保存。恢复时得到的只能是完整的旧上下文或完整的新上下文，不自动重放摘要请求。压缩后旧 usage anchor 不再可信，恢复后的第一次预算检查使用 fallback 估算并重新建立锚点。
+
 ## 10. CLI/TUI
 
 使用 Node `readline` 和独立的 `TerminalRenderer`。UI只负责：
@@ -321,6 +390,7 @@ MVP 不通过事件日志精确重建 tool-call/result，不承诺从任意写�
 - 参数和 slash command 解析；
 - 把 `AgentEvent` 渲染为可区分的终端区块；
 - 命令审批；
+- 解析 `/compact` 并把压缩操作委托给 runtime/context service；
 - Ctrl+C 转换为 AbortSignal；
 - session、usage warning 和终态展示。
 
@@ -342,6 +412,7 @@ UI不直接执行工具、修改 model context 或写 session。Agent busy 时�
 
 - Unit：配置、mapper、validator、path policy、budget、limits。
 - Integration：fake provider + real Loop + 临时文件系统。
+- Context compactor：摘要请求、完整消息边界、no-op/失败回退和压缩后预算重算。
 - Process/CLI：spawn 构建后的 CLI，检查参数、交互和退出码。
 - Live E2E：本地 tarball 安装到仓库外 demo，通过真实网关执行。
 
@@ -369,12 +440,22 @@ UI不直接执行工具、修改 model context 或写 session。Agent busy 时�
 
 演示模型具有很长上下文，MVP 先记录 usage 并阻止明显超限。自动摘要的质量和恢复复杂度留给后续增强。
 
+### 自动压缩默认关闭且显式可控
+
+后续扩展保留当前行为作为默认路径：`PICODE_AUTO_COMPACT=false` 时不自动请求摘要模型，仍使用 75% warning 和 90% stop；用户可以在 idle 状态用 `/compact` 主动整理历史。自动开启后只在普通请求前、达到独立阈值时压缩，并在失败或无进展时回退到原有 hard stop。
+
+### 摘要作为历史 assistant message
+
+摘要不引入模型协议不支持的 `summary` role，而使用带明确标记的 synthetic assistant message 保持现有消息 mapper 和 tool-call/result 配对规则。摘要内容仍视为可能不完整或过时的历史事实，后续任务需要通过本地工具重新验证。
+
 ## 13. 已知局限
 
 - compatible 网关可能和官方 SDK存在细节差异，需要真实 smoke test。
 - shell 审批不能阻止用户误批危险命令。
 - 路径检查不对抗恶意本地并发进程造成的全部 TOCTOU 竞态。
 - 字符估算不是 tokenizer，MVP 也不会自动压缩长会话。
+- 自动压缩即使实现，也只能减少可裁剪的历史；当前任务本身、system prompt 或不可拆分的最近 tool 组过大时仍可能触发 hard stop。
+- 摘要模型可能遗漏细节或保留过时结论，压缩不是文件状态的事实来源。
 - 崩溃恢复只识别 pending 副作用，不重建完整事件历史。
 
 ## 14. 外部协议依据
