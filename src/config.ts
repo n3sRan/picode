@@ -2,13 +2,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1";
-export const DEFAULT_CONTEXT_WINDOW = 128_000;
+export const DEFAULT_MODEL = "gpt-5.6";
+export const DEFAULT_CONTEXT_WINDOW = 1_000_000;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 128_000;
+export const DEFAULT_MAX_LLM_REQUESTS = 30;
 
 export const CONFIG_KEYS = [
   "PICODE_API_KEY",
   "PICODE_BASE_URL",
   "PICODE_MODEL",
-  "PICODE_CONTEXT_WINDOW"
+  "PICODE_CONTEXT_WINDOW",
+  "PICODE_MAX_OUTPUT_TOKENS",
+  "PICODE_MAX_LLM_REQUESTS"
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -18,6 +23,8 @@ export interface PicodeConfig {
   baseUrl: string;
   model: string;
   contextWindow: number;
+  maxOutputTokens: number;
+  maxLlmRequests: number;
 }
 
 export interface LoadConfigOptions {
@@ -70,7 +77,7 @@ function parseDotenvValue(value: string): string {
 }
 
 /**
- * Reads only the four supported keys. Unknown dotenv entries are discarded
+ * Reads only the six supported keys. Unknown dotenv entries are discarded
  * and are never copied into process.env or returned to callers.
  */
 export function readAllowedDotenv(dotenvPath: string): SupportedConfigValues {
@@ -152,22 +159,32 @@ function parseBaseUrl(values: SupportedConfigValues): string {
   return value;
 }
 
-function parseContextWindow(values: SupportedConfigValues): number {
-  const rawValue = values.PICODE_CONTEXT_WINDOW;
+function parsePositiveInteger(
+  values: SupportedConfigValues,
+  key: ConfigKey,
+  fallback: number
+): number {
+  const rawValue = values[key];
   if (rawValue === undefined) {
-    return DEFAULT_CONTEXT_WINDOW;
+    return fallback;
   }
 
   const value = rawValue.trim();
   if (!/^[1-9]\d*$/.test(value)) {
-    throw new ConfigError("PICODE_CONTEXT_WINDOW must be a positive integer");
+    throw new ConfigError(`${key} must be a positive integer`);
   }
 
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new ConfigError("PICODE_CONTEXT_WINDOW must be a positive integer");
+    throw new ConfigError(`${key} must be a positive integer`);
   }
   return parsed;
+}
+
+function parseModel(values: SupportedConfigValues): string {
+  return values.PICODE_MODEL === undefined
+    ? DEFAULT_MODEL
+    : requireNonEmpty(values, "PICODE_MODEL");
 }
 
 export function loadConfig(options: LoadConfigOptions = {}): PicodeConfig {
@@ -180,7 +197,17 @@ export function loadConfig(options: LoadConfigOptions = {}): PicodeConfig {
   return {
     apiKey: requireNonEmpty(values, "PICODE_API_KEY"),
     baseUrl: parseBaseUrl(values),
-    model: requireNonEmpty(values, "PICODE_MODEL"),
-    contextWindow: parseContextWindow(values)
+    model: parseModel(values),
+    contextWindow: parsePositiveInteger(values, "PICODE_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW),
+    maxOutputTokens: parsePositiveInteger(
+      values,
+      "PICODE_MAX_OUTPUT_TOKENS",
+      DEFAULT_MAX_OUTPUT_TOKENS
+    ),
+    maxLlmRequests: parsePositiveInteger(
+      values,
+      "PICODE_MAX_LLM_REQUESTS",
+      DEFAULT_MAX_LLM_REQUESTS
+    )
   };
 }

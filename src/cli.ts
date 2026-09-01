@@ -147,7 +147,8 @@ async function runConfiguredCli(
     const provider = options.provider ?? new OpenAIChatProvider({
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
-      model: config.model
+      model: config.model,
+      maxOutputTokens: config.maxOutputTokens
     });
     const app = new TerminalApp({
       workspaceRoot: cliOptions.cwd,

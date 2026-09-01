@@ -129,10 +129,12 @@
 | --- | --- | --- | --- |
 | `PICODE_API_KEY` | 是 | 无 | 不得记录或传给子进程 |
 | `PICODE_BASE_URL` | 否 | `https://api.openai.com/v1` | API 根地址 |
-| `PICODE_MODEL` | 是 | 无 | 网关模型标识 |
-| `PICODE_CONTEXT_WINDOW` | 否 | `128000` | 正整数；按实际模型配置 |
+| `PICODE_MODEL` | 否 | `gpt-5.6` | 网关模型标识 |
+| `PICODE_CONTEXT_WINDOW` | 否 | `1000000` | 正整数；按实际模型配置 |
+| `PICODE_MAX_OUTPUT_TOKENS` | 否 | `128000` | 单次模型请求的最大输出长度 |
+| `PICODE_MAX_LLM_REQUESTS` | 否 | `30` | 每个任务允许的最大模型请求数 |
 
-优先级为 `进程环境变量 > 启动目录中的 .env > 代码默认值`。只解析这四个键，不把 `.env` 的其他内容注入环境。请求最大输出默认值为代码常量 `16384`，单次请求超时 120 秒。
+优先级为 `进程环境变量 > 启动目录中的 .env > 代码默认值`。只解析这六个键，不把 `.env` 的其他内容注入环境。单次请求最大输出和任务请求上限分别由 `PICODE_MAX_OUTPUT_TOKENS` 与 `PICODE_MAX_LLM_REQUESTS` 控制，单次请求超时 120 秒。
 
 ## 6. Agent Loop
 
@@ -177,7 +179,7 @@
 
 ### 6.4 限制
 
-- 每个用户任务最多 30 次 LLM 请求。
+- 每个用户任务默认最多 30 次 LLM 请求，可由 `PICODE_MAX_LLM_REQUESTS` 覆盖。
 - Agent 活跃时间最多 10 分钟，不包含等待审批时间。
 - 单次 LLM 请求最多 120 秒。
 - 单条命令最多 60 秒。

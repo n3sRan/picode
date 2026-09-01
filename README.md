@@ -7,12 +7,14 @@
 - Node.js 22+
 - OpenAI-compatible Chat Completions 网关
 
-复制 `.env.example` 为 `.env`，填写 `PICODE_API_KEY` 和 `PICODE_MODEL`。配置只读取以下四个键：
+复制 `.env.example` 为 `.env`，填写 `PICODE_API_KEY`；其余配置可按需覆盖。配置只读取以下六个键：
 
 - `PICODE_API_KEY`
 - `PICODE_BASE_URL`（默认 `https://api.openai.com/v1`）
-- `PICODE_MODEL`
-- `PICODE_CONTEXT_WINDOW`（默认 `128000`）
+- `PICODE_MODEL`（默认 `gpt-5.6`）
+- `PICODE_CONTEXT_WINDOW`（默认 `1000000`）
+- `PICODE_MAX_OUTPUT_TOKENS`（默认 `128000`）
+- `PICODE_MAX_LLM_REQUESTS`（默认 `30`，按每个任务计算）
 
 进程环境变量优先于启动目录中的 `.env`。`.env` 不会被提交，也不会被完整注入子进程环境。
 
@@ -29,7 +31,7 @@ npm test
 
 Phase 2 的文件工具只访问 canonical workspace 和当前 session 的 `/tmp/picode-<session-id>/`；`.env`/`.env.*` 受保护（`.env.example` 除外）。`run_command` 每次都要经过审批，获批后以当前用户权限运行，不构成操作系统级沙箱；子进程不会继承 `PICODE_*` 或 `OPENAI_API_KEY`。
 
-Phase 3 的 `AgentLoop` 显式推进 context check → LLM → tool-call 预验证 → 严格串行工具执行 → result feedback，要求模型通过唯一的 `finish` 工具结束任务，并执行默认 30 次请求、活跃时间、连续错误、重复调用、取消和上下文预算限制。默认 system prompt 要求普通问答也在同一响应调用 `finish`；`finish` 仅要求 `status`，摘要、验证和遗留问题字段可选。审批等待不计入活跃时间，工具批次在执行前整体校验。
+Phase 3 的 `AgentLoop` 显式推进 context check → LLM → tool-call 预验证 → 严格串行工具执行 → result feedback，要求模型通过唯一的 `finish` 工具结束任务，并执行默认 30 次请求（可按任务配置）、活跃时间、连续错误、重复调用、取消和上下文预算限制。默认 system prompt 要求普通问答也在同一响应调用 `finish`；`finish` 仅要求 `status`，摘要、验证和遗留问题字段可选。审批等待不计入活跃时间，工具批次在执行前整体校验。
 
 Phase 4 的 session 数据保存在用户目录 `~/.picode/projects/<workspace-hash>/`，不污染工作区；快照使用同目录临时文件加 rename 原子替换。工具执行前写入 pending marker，恢复时对未完成调用补安全结果并提示副作用状态未知，绝不自动重放；CLI 支持 `/new`、`/sessions`、`/resume` 和 `/exit`。
 

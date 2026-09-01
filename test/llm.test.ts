@@ -68,7 +68,7 @@ function fakeClient(chunks: readonly ChatCompletionChunk[]): {
 
 function makeProvider(
   chunks: readonly ChatCompletionChunk[],
-  options: { requestTimeoutMs?: number } = {}
+  options: { requestTimeoutMs?: number; maxOutputTokens?: number } = {}
 ): {
   provider: OpenAIChatProvider;
   create: ReturnType<typeof vi.fn>;
@@ -125,10 +125,21 @@ describe("OpenAIChatProvider", () => {
     expect(create).toHaveBeenCalledOnce();
     expect(create.mock.calls[0]?.[0]).toMatchObject({
       model: "test-model",
-      max_tokens: 16_384,
+      max_tokens: 128_000,
       stream: true,
       stream_options: { include_usage: true }
     });
+  });
+
+  it("sends a configured maximum output length", async () => {
+    const { provider, create } = makeProvider(
+      [makeChunk({ role: "assistant", content: "done" }, "stop")],
+      { maxOutputTokens: 128 }
+    );
+
+    await provider.complete(basicRequest());
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ max_tokens: 128 });
   });
 
   it("allows a missing usage chunk and sends tool definitions", async () => {

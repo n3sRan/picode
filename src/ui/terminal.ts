@@ -148,6 +148,9 @@ export class TerminalApp {
         tools: createBuiltinToolRegistry(),
         toolContext,
         initialMessages,
+        limits: {
+          maxLlmRequests: this.config.maxLlmRequests
+        },
         contextWindow: this.config.contextWindow,
         onEvent: (event) => this.renderer.render(event),
         beforeToolExecution: (call, checkpoint) => this.savePendingTool(call, checkpoint),

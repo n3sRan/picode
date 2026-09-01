@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { DEFAULT_MAX_OUTPUT_TOKENS } from "../config.js";
 import type {
   ChatCompletionChunk,
   ChatCompletionCreateParamsStreaming
@@ -13,7 +14,7 @@ import { toChatCompletionMessages, toChatCompletionTools } from "./message-mappe
 import type { LlmProvider, LlmRequest, LlmResponse, LlmStreamHandlers } from "./provider.js";
 
 export const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120_000;
-export const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
+export { DEFAULT_MAX_OUTPUT_TOKENS } from "../config.js";
 
 export interface ChatCompletionsClient {
   chat: {

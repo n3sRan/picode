@@ -1,4 +1,5 @@
 import type { AgentEvent } from "../domain/events.js";
+import { DEFAULT_CONTEXT_WINDOW } from "../config.js";
 import type {
   AssistantMessage,
   JsonObject,
@@ -205,7 +206,7 @@ export class AgentLoop {
     this.maxConsecutiveRepeatedToolCalls = options.maxConsecutiveRepeatedToolCalls ?? 3;
     this.onEvent = options.onEvent;
     this.clock = options.clock ?? systemMonotonicClock;
-    this.budget = options.budgetTracker ?? new BudgetTracker({ contextWindow: options.contextWindow ?? 128_000 });
+    this.budget = options.budgetTracker ?? new BudgetTracker({ contextWindow: options.contextWindow ?? DEFAULT_CONTEXT_WINDOW });
     this.beforeToolExecution = options.beforeToolExecution;
     this.afterToolExecution = options.afterToolExecution;
     this.activeTime = new ActiveTimeTracker(this.clock);

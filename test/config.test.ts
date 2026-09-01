@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_BASE_URL,
+  DEFAULT_MAX_LLM_REQUESTS,
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  DEFAULT_MODEL,
   DEFAULT_CONTEXT_WINDOW,
   ConfigError,
   loadConfig,
@@ -34,7 +37,9 @@ describe("loadConfig", () => {
         "PICODE_API_KEY=dotenv-secret",
         "PICODE_BASE_URL=https://dotenv.example/v1",
         "PICODE_MODEL=dotenv-model",
-        "PICODE_CONTEXT_WINDOW=64000"
+        "PICODE_CONTEXT_WINDOW=64000",
+        "PICODE_MAX_OUTPUT_TOKENS=8192",
+        "PICODE_MAX_LLM_REQUESTS=10"
       ].join("\n")
     );
 
@@ -44,7 +49,9 @@ describe("loadConfig", () => {
         PICODE_API_KEY: "process-secret",
         PICODE_BASE_URL: "https://process.example/v1",
         PICODE_MODEL: "process-model",
-        PICODE_CONTEXT_WINDOW: "90000"
+        PICODE_CONTEXT_WINDOW: "90000",
+        PICODE_MAX_OUTPUT_TOKENS: "900000",
+        PICODE_MAX_LLM_REQUESTS: "20"
       }
     });
 
@@ -52,11 +59,13 @@ describe("loadConfig", () => {
       apiKey: "process-secret",
       baseUrl: "https://process.example/v1",
       model: "process-model",
-      contextWindow: 90000
+      contextWindow: 90000,
+      maxOutputTokens: 900000,
+      maxLlmRequests: 20
     });
   });
 
-  it("reads only the four supported keys and applies defaults", () => {
+  it("reads only the six supported keys and applies defaults", () => {
     const startupDir = createTemporaryDirectory();
     const dotenvPath = join(startupDir, ".env");
     writeFileSync(
@@ -82,11 +91,29 @@ describe("loadConfig", () => {
       apiKey: "dotenv-secret",
       baseUrl: DEFAULT_BASE_URL,
       model: "dotenv-model",
-      contextWindow: DEFAULT_CONTEXT_WINDOW
+      contextWindow: DEFAULT_CONTEXT_WINDOW,
+      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxLlmRequests: DEFAULT_MAX_LLM_REQUESTS
     });
   });
 
-  it.each(["PICODE_API_KEY", "PICODE_MODEL"])("fails before a request when %s is missing", (missingKey) => {
+  it("uses the configured defaults when optional model and limit values are absent", () => {
+    const startupDir = createTemporaryDirectory();
+
+    expect(loadConfig({
+      startupDir,
+      env: { PICODE_API_KEY: "process-secret" }
+    })).toEqual({
+      apiKey: "process-secret",
+      baseUrl: DEFAULT_BASE_URL,
+      model: DEFAULT_MODEL,
+      contextWindow: DEFAULT_CONTEXT_WINDOW,
+      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxLlmRequests: DEFAULT_MAX_LLM_REQUESTS
+    });
+  });
+
+  it.each(["PICODE_API_KEY"])("fails before a request when %s is missing", (missingKey) => {
     const startupDir = createTemporaryDirectory();
     const env: NodeJS.ProcessEnv = {
       PICODE_API_KEY: "process-secret",
@@ -97,6 +124,31 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ startupDir, env })).toThrowError(
       new ConfigError(`${missingKey} is required`)
     );
+  });
+
+  it.each([
+    "PICODE_CONTEXT_WINDOW",
+    "PICODE_MAX_OUTPUT_TOKENS",
+    "PICODE_MAX_LLM_REQUESTS"
+  ])("rejects a non-positive or non-integer %s", (key) => {
+    const startupDir = createTemporaryDirectory();
+    const env: NodeJS.ProcessEnv = {
+      PICODE_API_KEY: "process-secret",
+      [key]: "0.5"
+    };
+
+    expect(() => loadConfig({ startupDir, env })).toThrowError(
+      new ConfigError(`${key} must be a positive integer`)
+    );
+  });
+
+  it("rejects an explicitly empty model while allowing it to be omitted", () => {
+    const startupDir = createTemporaryDirectory();
+
+    expect(() => loadConfig({
+      startupDir,
+      env: { PICODE_API_KEY: "process-secret", PICODE_MODEL: "   " }
+    })).toThrowError(new ConfigError("PICODE_MODEL is required"));
   });
 
   it("redacts secrets from error text and output text", () => {

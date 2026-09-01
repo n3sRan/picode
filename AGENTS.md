@@ -42,7 +42,7 @@
 
 1. Agent Loop 必须由本项目显式实现，状态、错误和终止原因必须可观察、可测试。
 2. 正常完成必须由模型调用唯一的 `finish` 工具；纯文本停止不等于任务成功。
-3. 每个用户任务最多 30 次 LLM 请求、10 分钟 Agent 活跃时间；单次模型请求 120 秒、单条命令 60 秒。
+3. 每个用户任务默认最多 30 次 LLM 请求（可由 `PICODE_MAX_LLM_REQUESTS` 配置）、10 分钟 Agent 活跃时间；单次模型请求 120 秒、单条命令 60 秒。
 4. 连续 3 次工具错误，或第 3 次出现完全相同的连续工具调用时终止；重复调用的第 3 次不得执行。
 5. 所有 tool arguments 必须在本地验证。任一调用预验证失败时整批不执行，并为每个 tool-call ID 补齐结果。
 6. 工具严格串行执行；`finish` 也必须先写入对应 tool result 再进入终态。
@@ -61,8 +61,10 @@
 - `PICODE_BASE_URL`
 - `PICODE_MODEL`
 - `PICODE_CONTEXT_WINDOW`
+- `PICODE_MAX_OUTPUT_TOKENS`
+- `PICODE_MAX_LLM_REQUESTS`
 
-优先级为 `进程环境变量 > 启动目录中的 .env > 代码默认值`。只读取这四个键，不把 `.env` 全量注入环境。仓库提交 `.env.example`，并忽略 `.env` 和会话数据。
+优先级为 `进程环境变量 > 启动目录中的 .env > 代码默认值`。只读取这六个键，不把 `.env` 全量注入环境。`PICODE_MODEL` 缺省为 `gpt-5.6`，`PICODE_CONTEXT_WINDOW` 缺省为 `1000000`，`PICODE_MAX_OUTPUT_TOKENS` 缺省为 `128000`，`PICODE_MAX_LLM_REQUESTS` 缺省为 `30`。仓库提交 `.env.example`，并忽略 `.env` 和会话数据。
 
 每个主请求启用 `stream_options.include_usage` 并记录 `usage.prompt_tokens`。MVP 不自动 compaction：下一次请求前仅用最近一次 prompt usage 加新增消息的保守估算做上限保护；usage 缺失时降级为完整上下文估算并显示警告。
 

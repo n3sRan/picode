@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
+import { DEFAULT_MAX_OUTPUT_TOKENS, type PicodeConfig } from "../src/config.js";
 import type { AssistantMessage, ToolCall } from "../src/domain/messages.js";
 import { ScriptedLlmProvider, type LlmResponse } from "../src/llm/provider.js";
 import { SessionStore, type SessionSnapshot } from "../src/sessions/index.js";
@@ -91,12 +92,15 @@ function textResponse(text: string): LlmResponse {
   };
 }
 
-function createConfig() {
+function createConfig(overrides: Partial<PicodeConfig> = {}): PicodeConfig {
   return {
     apiKey: "ui-test-secret",
     baseUrl: "https://example.test/v1",
     model: "test-model",
-    contextWindow: 128_000
+    contextWindow: 128_000,
+    maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    maxLlmRequests: 30,
+    ...overrides
   };
 }
 
@@ -107,7 +111,8 @@ function createApp(
   output = new CaptureWritable(),
   errorOutput = new CaptureWritable(),
   input = new PassThrough(),
-  isInteractive = false
+  isInteractive = false,
+  configOverrides: Partial<PicodeConfig> = {}
 ): { app: TerminalApp; store: SessionStore; output: CaptureWritable; errorOutput: CaptureWritable } {
   const store = new SessionStore({
     workspaceRoot,
@@ -117,7 +122,7 @@ function createApp(
   return {
     app: new TerminalApp({
       workspaceRoot,
-      config: createConfig(),
+      config: createConfig(configOverrides),
       provider,
       sessionStore: store,
       input,
@@ -276,6 +281,38 @@ describe("slash commands and terminal task lifecycle", () => {
     const projects = readdirSync(join(root, "projects"));
     expect(projects).toHaveLength(1);
     expect(readdirSync(join(root, "projects", projects[0]!, "sessions"))).toHaveLength(1);
+  });
+
+  it("applies the configured per-task LLM request limit through the CLI", async () => {
+    const startupDir = temporaryDirectory("picode-cli-limit-startup-");
+    const workspace = temporaryDirectory("picode-cli-limit-workspace-");
+    const root = temporaryDirectory("picode-cli-limit-root-");
+    const output = new CaptureWritable();
+    const errorOutput = new CaptureWritable();
+    const provider = new ScriptedLlmProvider([
+      { response: textResponse("first attempt") },
+      { response: textResponse("second attempt") }
+    ]);
+
+    const result = main(["--cwd", workspace, "keep working"], {
+      startupDir,
+      env: {
+        PICODE_API_KEY: "ui-test-secret",
+        PICODE_MAX_LLM_REQUESTS: "2"
+      },
+      input: new PassThrough(),
+      stdout: output,
+      stderr: errorOutput,
+      sessionRoot: root,
+      provider,
+      isInteractive: false
+    });
+    const exitCode = typeof result === "number" ? result : await result;
+
+    expect(exitCode).toBe(4);
+    expect(provider.requests).toHaveLength(2);
+    expect(output.text).toContain("[limit_reached]");
+    expect(errorOutput.text).toContain("usage was unavailable");
   });
 
   it("drives the interactive readline loop until /exit", async () => {

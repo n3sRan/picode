@@ -256,7 +256,7 @@ MVP 不支持工作区外文件工具审批。用户若确有需要，只能主�
 
 list/search/read/write/edit 执行器必须拒绝 `.env` 和 `.env.*`，仅 `.env.example` 例外。该限制必须在执行层实现，不能只靠 UI 隐藏。
 
-配置模块只提取四个 `PICODE_*` 键；redactor 在 UI、错误和 session 保存前替换实际 API Key。递归 JSON 脱敏只处理值并保留对象键名，避免破坏工具参数名。
+配置模块只提取六个 `PICODE_*` 键，并提供模型、上下文窗口、单次输出长度和任务请求上限的默认值；redactor 在 UI、错误和 session 保存前替换实际 API Key。递归 JSON 脱敏只处理值并保留对象键名，避免破坏工具参数名。
 
 ### 7.3 ApprovalBroker
 
