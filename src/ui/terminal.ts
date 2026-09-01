@@ -376,6 +376,7 @@ export class TerminalApp {
       throw new Error("Input was aborted");
     }
     const lineIterator = this.ensureLineReader();
+    this.lineInterface?.setPrompt(prompt);
     promptOutput.write(prompt);
     let removeAbortListener: (() => void) | undefined;
     let abortPromise: Promise<never> | undefined;

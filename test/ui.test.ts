@@ -432,6 +432,29 @@ describe("slash commands and terminal task lifecycle", () => {
     expect(output.text).toContain("Goodbye.");
   });
 
+  it("keeps the interactive prompt when readline redraws after backspace", async () => {
+    const workspace = temporaryDirectory("picode-ui-edit-workspace-");
+    const root = temporaryDirectory("picode-ui-edit-root-");
+    const input = new PassThrough();
+    const output = new CaptureWritable();
+    const errorOutput = new CaptureWritable();
+    const { app } = createApp(
+      workspace,
+      root,
+      new ScriptedLlmProvider([{ response: finishResponse() }]),
+      output,
+      errorOutput,
+      input,
+      true
+    );
+
+    const running = app.runInteractive();
+    input.end("ab\x7f\n/exit\n");
+    await running;
+
+    expect(output.text.match(/picode> /g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
   it("keeps approval input exclusive from the ordinary command reader", async () => {
     const workspace = temporaryDirectory("picode-ui-approval-workspace-");
     const root = temporaryDirectory("picode-ui-approval-root-");
