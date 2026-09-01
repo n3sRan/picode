@@ -1,4 +1,5 @@
 import type { AgentEvent } from "../domain/events.js";
+import type { ContextUsage } from "../domain/context.js";
 import { DEFAULT_CONTEXT_WINDOW } from "../config.js";
 import type {
   AssistantMessage,
@@ -74,6 +75,7 @@ export interface AgentRunResult {
   events: readonly AgentEvent[];
   limits: LimitSnapshot;
   usage?: LlmUsage;
+  contextUsage?: ContextUsage;
   finish?: ResolvedFinishArgs;
 }
 
@@ -377,7 +379,12 @@ export class AgentLoop {
       }
 
       this.repetition.commitBatch(assistantMessage.toolCalls);
-      const outcome = await this.executeBatch(validation.validEntries, assistantMessage.toolCalls, signal);
+      const outcome = await this.executeBatch(
+        validation.validEntries,
+        assistantMessage.toolCalls,
+        toolDefinitions,
+        signal
+      );
       if (outcome !== undefined) {
         return outcome;
       }
@@ -448,6 +455,7 @@ export class AgentLoop {
   private async executeBatch(
     entries: readonly ValidatedToolCall[],
     calls: readonly ToolCall[],
+    toolDefinitions: ReturnType<ToolRegistry["toLlmDefinitions"]>,
     signal: AbortSignal
   ): Promise<AgentRunResult | undefined> {
     let finishResult: ToolResult | undefined;
@@ -510,11 +518,14 @@ export class AgentLoop {
         return this.terminate("failed", "finish_failure", "The finish tool did not return an accepted result.");
       }
       const terminal = finishTerminalState(finishArgs.status);
+      const contextUsage = this.budget.measureCurrent(this.messages, toolDefinitions);
+      this.emit({ type: "context_usage", usage: contextUsage });
       return this.terminate(
         terminal.state,
         terminal.reason,
         finishArgs.summary,
-        finishArgs
+        finishArgs,
+        contextUsage
       );
     }
     return undefined;
@@ -649,11 +660,18 @@ export class AgentLoop {
     state: TerminalState,
     reason: TerminationReason,
     message: string,
-    finish?: ResolvedFinishArgs
+    finish?: ResolvedFinishArgs,
+    contextUsage?: ContextUsage
   ): AgentRunResult {
     this.setState(state);
     const eventMessage = this.redact(message);
-    this.emit({ type: "agent_terminated", state, reason, message: eventMessage });
+    this.emit({
+      type: "agent_terminated",
+      state,
+      reason,
+      message: eventMessage,
+      ...(contextUsage === undefined ? {} : { contextUsage })
+    });
     return {
       terminalState: state,
       reason,
@@ -662,6 +680,7 @@ export class AgentLoop {
       events: [...this.events],
       limits: this.limits.snapshot(this.activeTime.elapsedMs()),
       ...(this.lastUsage === undefined ? {} : { usage: this.lastUsage }),
+      ...(contextUsage === undefined ? {} : { contextUsage }),
       ...(finish === undefined ? {} : { finish })
     };
   }

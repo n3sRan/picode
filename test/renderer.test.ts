@@ -59,6 +59,15 @@ describe("TerminalRenderer", () => {
       { type: "tool_completed", toolCallId: "call-1", status: "ok", summary: "Read 12 lines." },
       { type: "context_warning", message: "Context usage is high", ratio: 0.75 },
       {
+        type: "context_usage",
+        usage: {
+          estimatedTokens: 12_345,
+          ratio: 0.0123,
+          contextWindow: 1_000_000,
+          source: "usage_anchor"
+        }
+      },
+      {
         type: "agent_terminated",
         state: "completed",
         reason: "finish_success",
@@ -79,7 +88,11 @@ describe("TerminalRenderer", () => {
     expect(output.text).toContain("[approval] approved");
     expect(output.text).toContain("[tool result] read_file ok");
     expect(output.text).toContain("[completed] Task completed.");
+    expect(output.text).toContain("context: 12,345 tokens (1.23% of 1,000,000; usage anchor)");
     expect(errorOutput.text).toContain("picode: [warning] Context usage is high (75%)");
+    expect(output.text.indexOf("context: 12,345 tokens")).toBeGreaterThan(
+      output.text.indexOf("[completed] Task completed.")
+    );
 
     expect(output.text.indexOf("[assistant]")).toBeLessThan(output.text.indexOf("[tool] read_file"));
     expect(output.text.indexOf("[tool] read_file")).toBeLessThan(output.text.indexOf("[tool result] read_file ok"));

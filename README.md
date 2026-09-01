@@ -8,6 +8,7 @@
 
 - OpenAI-compatible Chat Completions、SSE streaming 和原生 tool calling。
 - 严格串行的 Agent Loop，以及唯一的 `finish` 完成协议。
+- `finish` 终态显示当前上下文估算 token 数和窗口占用比例。
 - 本地 JSON Schema 参数校验、工具错误处理、重复调用检测和任务限制。
 - 工作区路径策略、符号链接边界检查、`.env` 文件保护和输出脱敏。
 - 每条 shell 命令逐次审批；命令以当前用户权限运行。

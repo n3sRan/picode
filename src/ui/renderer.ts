@@ -1,4 +1,5 @@
 import type { Writable } from "node:stream";
+import type { ContextUsage } from "../domain/context.js";
 import type { AgentEvent } from "../domain/events.js";
 
 type Tone = "assistant" | "tool" | "approval" | "usage" | "success" | "warning" | "error" | "info";
@@ -38,6 +39,12 @@ function indent(value: string): string {
     .join("\n");
 }
 
+function formatContextUsage(usage: ContextUsage): string {
+  const percent = `${(usage.ratio * 100).toFixed(2).replace(/\.?0+$/, "")}%`;
+  const source = usage.source === "fallback_estimate" ? "fallback estimate" : "usage anchor";
+  return `context: ${usage.estimatedTokens.toLocaleString("en-US")} tokens (${percent} of ${usage.contextWindow.toLocaleString("en-US")}; ${source})`;
+}
+
 function toolArguments(value: Record<string, unknown>): string | undefined {
   const serialized = JSON.stringify(value);
   if (serialized === undefined || serialized === "{}") {
@@ -66,6 +73,7 @@ export class TerminalRenderer {
   private hasOutput = false;
   private requestCount = 0;
   private readonly toolNames = new Map<string, string>();
+  private pendingContextUsage: ContextUsage | undefined;
 
   public constructor(options: TerminalRendererOptions) {
     this.output = options.output;
@@ -79,6 +87,7 @@ export class TerminalRenderer {
     this.assistantTextOpen = false;
     this.requestCount = 0;
     this.toolNames.clear();
+    this.pendingContextUsage = undefined;
   }
 
   public renderSessionHeader(sessionId: string, name: string): void {
@@ -157,8 +166,20 @@ export class TerminalRenderer {
       case "context_warning":
         this.renderWarning(`${event.message} (${Math.round(event.ratio * 100)}%)`);
         return;
+      case "context_usage":
+        this.pendingContextUsage = event.usage;
+        return;
       case "agent_terminated":
-        this.writeBlock(event.state, terminalTone(event.state), event.message);
+        {
+          const contextUsage = event.contextUsage ?? this.pendingContextUsage;
+          this.writeBlock(
+            event.state,
+            terminalTone(event.state),
+            event.message,
+            contextUsage === undefined ? [] : [formatContextUsage(contextUsage)]
+          );
+          this.pendingContextUsage = undefined;
+        }
         return;
       default:
         return;

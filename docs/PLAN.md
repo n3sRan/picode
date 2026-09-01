@@ -3,7 +3,7 @@
 ## 1. 状态与原则
 
 - 当前状态：Phase 0-5 已完成，Phase 6 进行中（限制与文件搜索边界、基础结构清理、LLM 运行参数配置、取消/超时处理、批次调用关联、macOS 大小写路径保护和恢复/限制回归测试已完成，下一批待定）。
-- 下一批已确定为 Phase 7：先完成 `finish` 后上下文计量，再实现显式 `/compact`，最后接入默认关闭的自动压缩；本阶段目前只完成文档设计，尚未修改代码。
+- Phase 7 已开始：批次 H（`finish` 后上下文计量）已完成，下一步实现显式 `/compact`，最后接入默认关闭的自动压缩。
 - 优先完成可解释、可测试的 MVP，不以生产级完整性为目标。
 - 每个阶段都必须保持可构建、可测试。
 - 可选增强只能在全部 MVP 验收通过后开始。
@@ -19,7 +19,7 @@
 | M4 | 基本会话持久化与 CLI | 会话可新建、列出、恢复；单任务与交互入口可用（已提交） |
 | M5 | 全量验证与隔离 E2E | 本地 tarball 可在仓库外 demo 从 `picode` bin 完成真实任务（已由用户手动验证） |
 | M6 | 文档、演示与提交检查 | 行为与文档一致，演示方案和提交物就绪 |
-| M7 | 上下文可观测性与压缩 | `finish` 终态显示当前上下文；`/compact` 可安全整理 session；可选自动压缩在阈值前触发且关闭时行为不变 |
+| M7 | 上下文可观测性与压缩 | `finish` 终态显示当前上下文（已完成）；`/compact` 可安全整理 session；可选自动压缩在阈值前触发且关闭时行为不变 |
 
 若进度落后，优先削减 UI 装饰和便利功能，不削减 Loop、参数校验、路径边界、命令审批、终止限制、基本持久化和确定性测试。
 
@@ -200,7 +200,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 
 ## 10. Phase 7：上下文可观测性与压缩
 
-状态：待开始（SPEC、ARCHITECTURE 和本计划已先完成设计；当前代码仍保持 Phase 6 行为）。
+状态：进行中（批次 H 已完成；SPEC、ARCHITECTURE 和本计划已同步，批次 I/J/K 待执行）。
 
 目标是在不破坏现有 `finish`、请求上限、session 恢复和工具安全边界的前提下，增加可解释的上下文度量和可回退的压缩能力。实现顺序固定为“度量 → 显式压缩 → 自动压缩 → 回归和演示”，每一步都先保持 build、typecheck 和确定性测试可通过。
 
@@ -215,12 +215,12 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 
 ### 10.2 实现批次
 
-批次 H：完成度量和终态展示。
+批次 H：完成度量和终态展示（已完成）。
 
-- 扩展 BudgetTracker 的当前上下文计算接口和 `AgentRunResult`/事件数据；
-- 在 finish tool result 已写入后计算度量，并让 renderer 将其作为终态末尾详情；
-- 覆盖 usage anchor、fallback、tool schema、finish result、success/partial/failure 和“不得增加请求”的行为；
-- 完成后先向用户说明新增测试文件、关键断言、运行方式和未覆盖风险。
+- 已扩展 BudgetTracker 的当前上下文计算接口和 `AgentRunResult`/事件数据；
+- 已在 finish tool result 写入后计算度量，并让 renderer 将其作为终态末尾详情；
+- 已覆盖 usage anchor、fallback、tool schema、finish result、终态顺序和“不得增加请求”的行为；
+- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`，82 个测试通过。
 
 批次 I：ContextCompactor 与显式 `/compact`。
 

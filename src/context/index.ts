@@ -7,3 +7,4 @@ export {
   DEFAULT_CONTEXT_WARNING_RATIO
 } from "./budget.js";
 export type { BudgetTrackerOptions, ContextBudgetDecision } from "./budget.js";
+export type { ContextUsage, ContextUsageSource } from "../domain/context.js";

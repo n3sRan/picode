@@ -1,4 +1,5 @@
 import type { LlmUsage, Message } from "../domain/messages.js";
+import type { ContextUsage } from "../domain/context.js";
 import type { LlmToolDefinition } from "../llm/provider.js";
 
 export const DEFAULT_CONTEXT_WARNING_RATIO = 0.75;
@@ -91,13 +92,9 @@ export class BudgetTracker {
     messages: readonly Message[],
     tools: readonly LlmToolDefinition[] = []
   ): ContextBudgetDecision {
-    const currentCharacters = estimateMessageCharacters(messages) + estimateToolCharacters(tools);
-    const anchoredPromptTokens = this.lastPromptTokens;
-    const usedFallbackEstimate = anchoredPromptTokens === undefined;
-    const estimatedTokens = usedFallbackEstimate
-      ? Math.ceil(currentCharacters / this.charsPerToken)
-      : anchoredPromptTokens + Math.ceil(Math.max(0, currentCharacters - this.anchorCharacters) / this.charsPerToken);
-    const ratio = estimatedTokens / this.contextWindow;
+    const currentUsage = this.measureCurrent(messages, tools);
+    const usedFallbackEstimate = currentUsage.source === "fallback_estimate";
+    const { estimatedTokens, ratio } = currentUsage;
     const warningParts: string[] = [];
 
     if (usedFallbackEstimate && !this.fallbackWarningIssued) {
@@ -115,6 +112,24 @@ export class BudgetTracker {
       estimatedTokens,
       usedFallbackEstimate,
       ...(warningParts.length === 0 ? {} : { warning: warningParts.join(" ") })
+    };
+  }
+
+  public measureCurrent(
+    messages: readonly Message[],
+    tools: readonly LlmToolDefinition[] = []
+  ): ContextUsage {
+    const currentCharacters = estimateMessageCharacters(messages) + estimateToolCharacters(tools);
+    const anchoredPromptTokens = this.lastPromptTokens;
+    const usedFallbackEstimate = anchoredPromptTokens === undefined;
+    const estimatedTokens = usedFallbackEstimate
+      ? Math.ceil(currentCharacters / this.charsPerToken)
+      : anchoredPromptTokens + Math.ceil(Math.max(0, currentCharacters - this.anchorCharacters) / this.charsPerToken);
+    return {
+      estimatedTokens,
+      ratio: estimatedTokens / this.contextWindow,
+      contextWindow: this.contextWindow,
+      source: usedFallbackEstimate ? "fallback_estimate" : "usage_anchor"
     };
   }
 

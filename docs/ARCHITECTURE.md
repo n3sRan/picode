@@ -291,9 +291,9 @@ MVP 不实现自动 compaction，避免引入摘要正确性和恢复语义。
 
 估算器包含固定消息/tool schema 开销，但不声称是 tokenizer。这个模块以后可以扩展为 usage anchor + automatic compaction，而无需修改 Agent Loop 的主要边界。
 
-### 8.1 下一批：上下文计量与压缩
+### 8.1 上下文计量与压缩（阶段性实现）
 
-以下是已确认但尚未实现的扩展设计；第 8 节的 75% warning、90% stop 是关闭自动压缩时的兼容基线。
+以下设计中，finish 后上下文计量已实现，ContextCompactor 和自动压缩尚未实现；第 8 节的 75% warning、90% stop 是关闭自动压缩时的兼容基线。
 
 `BudgetTracker` 增加当前上下文度量接口，返回：
 
@@ -308,7 +308,7 @@ ContextUsage {
 
 `measureCurrent(messages, tools)` 使用和下一次普通请求相同的消息与 tool schema 输入。若存在最近一次真实 `prompt_tokens`，计算为该锚点加锚点之后新增序列化内容的保守估算；压缩或恢复后锚点失效，必须从新消息重新估算，不能沿用已不匹配的 usage。`source` 用于 UI 明确区分真实 usage 锚点和 fallback 估算。
 
-合法 `finish` 的执行路径变为：
+合法 `finish` 的执行路径已变为：
 
 ```mermaid
 flowchart TD

@@ -318,6 +318,58 @@ describe("AgentLoop flow and tool batching", () => {
     });
     expect(result.messages.at(-1)?.content).toContain('"summary":"Task completed."');
   });
+
+  it("measures context after the accepted finish result and before termination", async () => {
+    const tools = new ToolRegistry([finishTool]);
+    const budget = new BudgetTracker({ contextWindow: 10_000, charsPerToken: 1 });
+    const response = {
+      ...finishResponse(),
+      usage: { promptTokens: 100 }
+    };
+    const provider = new ScriptedLlmProvider([{ response }]);
+    const result = await new AgentLoop({
+      provider,
+      tools,
+      toolContext: makeContext(),
+      budgetTracker: budget
+    }).run("finish and measure context");
+
+    const expected = budget.measureCurrent(result.messages, tools.toLlmDefinitions());
+    const withoutFinishResult = budget.measureCurrent(result.messages.slice(0, -1), tools.toLlmDefinitions());
+    const contextEvent = result.events.find((event) => event.type === "context_usage");
+    const terminationEvent = result.events.at(-1);
+    const finishToolEventIndex = result.events.findIndex(
+      (event) => event.type === "tool_completed" && event.toolCallId === "finish-call"
+    );
+    const contextEventIndex = result.events.findIndex((event) => event.type === "context_usage");
+
+    expect(result.terminalState).toBe("completed");
+    expect(result.messages.at(-1)).toMatchObject({ role: "tool", toolCallId: "finish-call" });
+    expect(expected.estimatedTokens).toBeGreaterThan(withoutFinishResult.estimatedTokens);
+    expect(expected.source).toBe("usage_anchor");
+    expect(result.contextUsage).toEqual(expected);
+    expect(contextEvent).toEqual({ type: "context_usage", usage: expected });
+    expect(terminationEvent).toMatchObject({ type: "agent_terminated", contextUsage: expected });
+    expect(finishToolEventIndex).toBeGreaterThanOrEqual(0);
+    expect(contextEventIndex).toBeGreaterThan(finishToolEventIndex);
+    expect(contextEventIndex).toBeLessThan(result.events.length - 1);
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  it("reports fallback context estimation after finish when usage is missing", async () => {
+    const result = await new AgentLoop({
+      provider: new ScriptedLlmProvider([{ response: finishResponse() }]),
+      tools: new ToolRegistry([finishTool]),
+      toolContext: makeContext()
+    }).run("finish without usage");
+
+    expect(result.contextUsage).toMatchObject({
+      source: "fallback_estimate",
+      estimatedTokens: expect.any(Number),
+      ratio: expect.any(Number),
+      contextWindow: expect.any(Number)
+    });
+  });
 });
 
 describe("AgentLoop limits and cancellation", () => {

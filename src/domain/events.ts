@@ -1,4 +1,5 @@
 import type { AssistantMessage, LlmUsage, ToolCall } from "./messages.js";
+import type { ContextUsage } from "./context.js";
 import type { AgentState, TerminalState, TerminationReason } from "./state.js";
 import type { ToolExecutionStatus } from "./tool.js";
 
@@ -20,9 +21,11 @@ export type AgentEvent =
   | { type: "approval_resolved"; approved: boolean }
   | { type: "tool_completed"; toolCallId: string; status: ToolExecutionStatus; summary: string }
   | { type: "context_warning"; message: string; ratio: number }
+  | { type: "context_usage"; usage: ContextUsage }
   | {
       type: "agent_terminated";
       state: TerminalState;
       reason: TerminationReason;
       message: string;
+      contextUsage?: ContextUsage;
     };
