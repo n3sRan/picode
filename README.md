@@ -1,50 +1,149 @@
 # picode
 
-`picode` 是一个从零实现的 TypeScript Coding Agent。当前仓库已完成 Phase 0-5，并正在进行 Phase 6 增强：项目脚手架、配置解析、密钥脱敏、LLM 内部协议/provider 抽象、工具参数校验、路径边界、文件工具、命令审批、显式 Agent Loop、终止限制、上下文预算保护、原子会话快照、CLI 任务/交互入口和真实 API 隔离流程验证。
+`picode` 是一个从零实现的 TypeScript Coding Agent。它通过 OpenAI-compatible Chat Completions API 理解编程任务，由模型选择本地工具完成文件浏览、修改和命令验证；工具参数、路径边界、审批和任务终止都由本地运行时控制。
 
-## 环境
+项目使用官方 `openai` JavaScript/TypeScript SDK 处理 HTTP、SSE 和流式响应聚合，但不使用 LangChain、OpenAI Agents SDK 等 Agent 框架。
 
-- Node.js 22+
-- OpenAI-compatible Chat Completions 网关
+## 特性
 
-复制 `.env.example` 为 `.env`，填写 `PICODE_API_KEY`；其余配置可按需覆盖。配置只读取以下六个键：
+- OpenAI-compatible Chat Completions、SSE streaming 和原生 tool calling。
+- 严格串行的 Agent Loop，以及唯一的 `finish` 完成协议。
+- 本地 JSON Schema 参数校验、工具错误处理、重复调用检测和任务限制。
+- 工作区路径策略、符号链接边界检查、`.env` 文件保护和输出脱敏。
+- 每条 shell 命令逐次审批；命令以当前用户权限运行。
+- 原子 session 快照、pending tool 恢复和 CLI 交互模式。
+- 可替换的 scripted provider、审批 broker 和 shell runner，便于确定性测试。
 
-- `PICODE_API_KEY`
-- `PICODE_BASE_URL`（默认 `https://api.openai.com/v1`）
-- `PICODE_MODEL`（默认 `gpt-5.6`）
-- `PICODE_CONTEXT_WINDOW`（默认 `1000000`）
-- `PICODE_MAX_OUTPUT_TOKENS`（默认 `128000`）
-- `PICODE_MAX_LLM_REQUESTS`（默认 `30`，按每个任务计算）
+## 环境要求
 
-进程环境变量优先于启动目录中的 `.env`。`.env` 不会被提交，也不会被完整注入子进程环境。
+- Node.js 22 或更高版本
+- macOS 或 Linux
+- 一个支持 Chat Completions、streaming 和 tools/tool_calls 的 OpenAI-compatible 网关
 
-## 开发命令
+## 快速开始
+
+在仓库根目录安装依赖、构建并配置 API Key：
 
 ```bash
 npm install
+npm run build
+cp .env.example .env
+```
+
+编辑 `.env` 填入 `PICODE_API_KEY`，然后执行一次任务：
+
+```bash
+node dist/cli.js --cwd /path/to/workspace "修复测试失败并运行验证"
+```
+
+不带任务参数会进入交互模式：
+
+```bash
+node dist/cli.js --cwd /path/to/workspace
+```
+
+也可以将本地构建注册为 `picode` 命令：
+
+```bash
+npm link
+picode --cwd /path/to/workspace "检查并修复这个项目"
+```
+
+查看命令帮助：
+
+```bash
+picode --help
+```
+
+## 配置
+
+配置优先级为：进程环境变量 > 启动目录中的 `.env` > 代码默认值。程序只读取以下六个配置项，不会把 `.env` 的其他内容注入子进程环境。
+
+| 变量 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `PICODE_API_KEY` | 是 | 无 | API Bearer Token；不会写入 session 或传给子进程 |
+| `PICODE_BASE_URL` | 否 | `https://api.openai.com/v1` | OpenAI-compatible API 根地址 |
+| `PICODE_MODEL` | 否 | `gpt-5.6` | 网关使用的模型标识 |
+| `PICODE_CONTEXT_WINDOW` | 否 | `1000000` | 上下文窗口大小 |
+| `PICODE_MAX_OUTPUT_TOKENS` | 否 | `128000` | 单次模型请求的最大输出长度 |
+| `PICODE_MAX_LLM_REQUESTS` | 否 | `30` | 每个任务允许的最大模型请求数 |
+
+`.env.example` 中提供了可直接复制的模板。进程环境变量适合 CI 或临时覆盖配置。
+
+## CLI 用法
+
+```text
+picode [--cwd <path>] [<task>]
+```
+
+- `picode`：进入交互模式；存在最近 session 时恢复，否则创建新 session。
+- `picode "<task>"`：创建新 session，执行单个任务并以终态退出码结束。
+- `--cwd <path>`：指定一个已存在的工作区目录。
+
+交互模式支持：
+
+| 命令 | 作用 |
+| --- | --- |
+| `/new [name]` | 创建并切换到新 session |
+| `/sessions` | 列出当前工作区的 session |
+| `/resume <id>` | 按完整 ID 或无歧义前缀恢复 session |
+| `/exit` | 退出交互模式 |
+
+单任务模式的退出码：
+
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | `finish(status=success)`，任务完成 |
+| `2` | `finish(status=partial)`，部分完成 |
+| `3` | 失败、协议错误或不可恢复错误 |
+| `4` | 请求数、活跃时间、重复调用或上下文限制 |
+| `130` | 用户中断 |
+
+## 内置工具
+
+| 工具 | 用途 |
+| --- | --- |
+| `list_files` | 列出工作区或 session 临时目录中的文件 |
+| `search_files` | 搜索文本，支持文件数和总字节预算 |
+| `read_file` | 读取 UTF-8 文件或指定行范围 |
+| `write_file` | 新建或覆盖文件，使用原子写入 |
+| `edit_file` | 对唯一匹配的文本执行原子替换 |
+| `run_command` | 经用户逐次审批后运行 shell 命令 |
+| `finish` | 报告任务成功、部分完成或失败，并结束当前任务 |
+
+正常完成必须由模型调用唯一的 `finish` 工具；仅输出文本不会被视为成功完成。
+
+## 安全边界与数据存储
+
+- 文件工具只允许访问 canonical workspace 和当前 session 临时目录 `/tmp/picode-<session-id>/`。
+- `.env` 和 `.env.*` 默认禁止被文件工具读取、搜索或修改；`.env.example` 例外。
+- `run_command` 每次都需要审批。审批后的命令继承当前用户环境，仅移除 `PICODE_*` 和 `OPENAI_API_KEY`，并以当前用户权限运行；它不是操作系统级沙箱，可能访问网络和工作区外路径。
+- API Key 在 UI、错误、工具输出和 session 快照中会被脱敏。
+- session 保存在 `~/.picode/projects/<workspace-hash>/`，不写入目标仓库。工具执行前会保存 pending marker；进程异常退出后只提示副作用状态未知，不会自动重放未确认的工具调用。
+
+## 开发与测试
+
+```bash
 npm run build
 npm run typecheck
 npm test
 ```
 
-真实 API 流程已由用户在仓库外的隔离 demo 中，通过打包后的 `picode` bin 入口手动验证。由于模型输出具有不确定性，该流程不纳入默认自动化测试；需要复核时应显式配置凭据并单独运行。
+默认测试套件只使用 fake provider、临时目录和安全的测试 runner，不访问网络。真实 API 流程应在仓库外的隔离 demo 中，通过打包后的 `picode` bin 入口显式运行；该流程已人工验证，但由于模型输出具有不确定性，不纳入默认自动化测试。
 
-官方 `openai` JavaScript SDK 已固定为 `4.104.0`。Phase 1 provider 使用 Chat Completions streaming API，并启用 `stream_options.include_usage`；HTTP 和 SSE 解码由 SDK 负责，provider 对 typed chunks 做最小聚合和协议校验，Agent Loop 仍由本项目实现。
+更多设计约束和模块说明见：
 
-Phase 2 的文件工具只访问 canonical workspace 和当前 session 的 `/tmp/picode-<session-id>/`；`.env`/`.env.*` 受保护（`.env.example` 除外）。`run_command` 每次都要经过审批，获批后继承当前用户环境（仅移除 `PICODE_*` 和 `OPENAI_API_KEY`），以当前用户权限运行，不构成操作系统级沙箱。
+- [产品规格](docs/SPEC.md)
+- [架构说明](docs/ARCHITECTURE.md)
+- [实施计划](docs/PLAN.md)
 
-Phase 3 的 `AgentLoop` 显式推进 context check → LLM → tool-call 预验证 → 严格串行工具执行 → result feedback，要求模型通过唯一的 `finish` 工具结束任务，并执行默认 30 次请求（可按任务配置）、活跃时间、连续错误、重复调用、取消和上下文预算限制。默认 system prompt 要求普通问答也在同一响应调用 `finish`；`finish` 仅要求 `status`，摘要、验证和遗留问题字段可选。审批等待不计入活跃时间，工具批次在执行前整体校验。
+## 当前限制
 
-Phase 4 的 session 数据保存在用户目录 `~/.picode/projects/<workspace-hash>/`，不污染工作区；快照使用同目录临时文件加 rename 原子替换。工具执行前写入 pending marker，恢复时对未完成调用补安全结果并提示副作用状态未知，绝不自动重放；CLI 支持 `/new`、`/sessions`、`/resume` 和 `/exit`。
+- 只支持 OpenAI-compatible Chat Completions，不支持其他模型协议。
+- 不提供 Web UI、IDE 插件、MCP、子 Agent、并行工具或 Windows 支持。
+- 不自动压缩上下文；上下文保护使用保守估算，并不等同于 tokenizer 计算。
+- shell 审批是用户确认机制，不是容器或操作系统级沙箱。
 
-Phase 6 当前完成 CLI UI 重构、限制与文件搜索边界加固、基础结构清理、LLM 取消/超时竞态处理、批次调用关联和 macOS 大小写路径保护，以及符号链接递归和崩溃恢复/限制终止回归测试：assistant 文本、工具调用/结果、审批、usage、warning 和终态使用独立标签与分块展示；TTY 输出使用语义 ANSI 颜色，重定向或管道输出保持稳定的无颜色文本。
+## License
 
-## CLI
-
-构建后可运行：
-
-```bash
-node dist/cli.js --cwd /path/to/workspace "task"
-```
-
-单任务模式使用 `picode --cwd <path> "task"`；交互模式会恢复当前工作区最近会话，且每次命令审批独占输入。任务终态分别映射为退出码 `0/2/3/4/130`。
+MIT
