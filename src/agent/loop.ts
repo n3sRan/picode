@@ -451,8 +451,9 @@ export class AgentLoop {
     signal: AbortSignal
   ): Promise<AgentRunResult | undefined> {
     let finishResult: ToolResult | undefined;
-    for (const [entryIndex, entry] of entries.entries()) {
-      const remainingCalls = calls.slice(entryIndex + 1);
+    for (const entry of entries) {
+      const currentIndex = calls.findIndex((call) => call.id === entry.call.id);
+      const remainingCalls = currentIndex < 0 ? [] : calls.slice(currentIndex + 1);
       if (signal.aborted) {
         this.appendRejectedResults(remainingCalls, "aborted", "Tool call was skipped because the task was aborted.");
         return this.terminate("aborted", "aborted", "The task was aborted during tool execution.");

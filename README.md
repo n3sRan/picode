@@ -1,6 +1,6 @@
 # picode
 
-`picode` 是一个从零实现的 TypeScript Coding Agent。当前仓库已完成 Phase 0-5，并正在进行 Phase 6 增强：项目脚手架、配置解析、密钥脱敏、LLM 内部协议/provider 抽象、工具参数校验、路径边界、文件工具、命令审批、显式 Agent Loop、终止限制、上下文预算保护、原子会话快照、CLI 任务/交互入口和真实 API 隔离 E2E 验证。
+`picode` 是一个从零实现的 TypeScript Coding Agent。当前仓库已完成 Phase 0-5，并正在进行 Phase 6 增强：项目脚手架、配置解析、密钥脱敏、LLM 内部协议/provider 抽象、工具参数校验、路径边界、文件工具、命令审批、显式 Agent Loop、终止限制、上下文预算保护、原子会话快照、CLI 任务/交互入口和真实 API 隔离流程验证。
 
 ## 环境
 
@@ -27,15 +27,17 @@ npm run typecheck
 npm test
 ```
 
+真实 API 流程已由用户在仓库外的隔离 demo 中，通过打包后的 `picode` bin 入口手动验证。由于模型输出具有不确定性，该流程不纳入默认自动化测试；需要复核时应显式配置凭据并单独运行。
+
 官方 `openai` JavaScript SDK 已固定为 `4.104.0`。Phase 1 provider 使用 Chat Completions streaming API，并启用 `stream_options.include_usage`；HTTP 和 SSE 解码由 SDK 负责，provider 对 typed chunks 做最小聚合和协议校验，Agent Loop 仍由本项目实现。
 
-Phase 2 的文件工具只访问 canonical workspace 和当前 session 的 `/tmp/picode-<session-id>/`；`.env`/`.env.*` 受保护（`.env.example` 除外）。`run_command` 每次都要经过审批，获批后以当前用户权限运行，不构成操作系统级沙箱；子进程不会继承 `PICODE_*` 或 `OPENAI_API_KEY`。
+Phase 2 的文件工具只访问 canonical workspace 和当前 session 的 `/tmp/picode-<session-id>/`；`.env`/`.env.*` 受保护（`.env.example` 除外）。`run_command` 每次都要经过审批，获批后继承当前用户环境（仅移除 `PICODE_*` 和 `OPENAI_API_KEY`），以当前用户权限运行，不构成操作系统级沙箱。
 
 Phase 3 的 `AgentLoop` 显式推进 context check → LLM → tool-call 预验证 → 严格串行工具执行 → result feedback，要求模型通过唯一的 `finish` 工具结束任务，并执行默认 30 次请求（可按任务配置）、活跃时间、连续错误、重复调用、取消和上下文预算限制。默认 system prompt 要求普通问答也在同一响应调用 `finish`；`finish` 仅要求 `status`，摘要、验证和遗留问题字段可选。审批等待不计入活跃时间，工具批次在执行前整体校验。
 
 Phase 4 的 session 数据保存在用户目录 `~/.picode/projects/<workspace-hash>/`，不污染工作区；快照使用同目录临时文件加 rename 原子替换。工具执行前写入 pending marker，恢复时对未完成调用补安全结果并提示副作用状态未知，绝不自动重放；CLI 支持 `/new`、`/sessions`、`/resume` 和 `/exit`。
 
-Phase 6 当前完成 CLI UI 重构、限制与文件搜索边界加固及基础结构清理：assistant 文本、工具调用/结果、审批、usage、warning 和终态使用独立标签与分块展示；TTY 输出使用语义 ANSI 颜色，重定向或管道输出保持稳定的无颜色文本。
+Phase 6 当前完成 CLI UI 重构、限制与文件搜索边界加固、基础结构清理、LLM 取消/超时竞态处理、批次调用关联和 macOS 大小写路径保护，以及符号链接递归和崩溃恢复/限制终止回归测试：assistant 文本、工具调用/结果、审批、usage、warning 和终态使用独立标签与分块展示；TTY 输出使用语义 ANSI 颜色，重定向或管道输出保持稳定的无颜色文本。
 
 ## CLI
 

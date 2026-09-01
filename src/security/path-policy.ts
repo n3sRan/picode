@@ -52,7 +52,8 @@ function pathIsInside(root: string, candidate: string): boolean {
 }
 
 function isProtectedSegment(segment: string): boolean {
-  return segment === ".env" || (segment.startsWith(".env.") && segment !== ".env.example");
+  const normalized = segment.toLowerCase();
+  return normalized === ".env" || (normalized.startsWith(".env.") && normalized !== ".env.example");
 }
 
 function hasProtectedSegment(root: string, candidate: string): boolean {

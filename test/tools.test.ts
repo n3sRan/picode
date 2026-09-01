@@ -43,6 +43,19 @@ function temporaryDirectory(prefix: string): string {
   return directory;
 }
 
+function detectCaseInsensitiveTemporaryFilesystem(): boolean {
+  const directory = mkdtempSync(join(tmpdir(), "picode-case-sensitivity-"));
+  try {
+    writeFileSync(join(directory, "case-probe"), "probe");
+    return existsSync(join(directory, "CASE-PROBE"));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+const isCaseInsensitiveMacOs =
+  process.platform === "darwin" && detectCaseInsensitiveTemporaryFilesystem();
+
 function makeContext(): ToolExecutionContext & { workspace: string; session: string } {
   const workspace = temporaryDirectory("picode-tool-workspace-");
   const session = temporaryDirectory("picode-tool-session-");
@@ -170,6 +183,25 @@ describe("file tools and PathPolicy", () => {
     expect(readFileSync(sessionFile, "utf8")).toBe("session-only");
   });
 
+  it("lists a symlinked directory without recursively traversing its target", async () => {
+    const context = makeContext();
+    mkdirSync(join(context.workspace, "nested"));
+    writeFileSync(join(context.workspace, "nested", "example.txt"), "content");
+    symlinkSync("..", join(context.workspace, "nested", "parent"));
+
+    const result = await listFilesTool.execute(context, {
+      path: ".",
+      recursive: true,
+      maxDepth: 20
+    }, new AbortController().signal);
+
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result.content).toContain("directory\tnested");
+    expect(result.content).toContain("file\tnested/example.txt");
+    expect(result.content).toContain("symlink\tnested/parent");
+    expect(result.content).not.toContain("nested/parent/nested");
+  });
+
   it("enforces a host-side search budget and reports an incomplete scan", async () => {
     const context = makeContext();
     writeFileSync(join(context.workspace, "a.txt"), "needle");
@@ -278,6 +310,18 @@ describe("file tools and PathPolicy", () => {
     expect(listing.content).toContain("file\t.env.example");
     expect(listing.content).not.toContain(".env.local");
   });
+
+  it.skipIf(!isCaseInsensitiveMacOs)(
+    "protects dotenv files reached through a case-insensitive path alias",
+    () => {
+      const context = makeContext();
+      writeFileSync(join(context.workspace, ".env"), "hidden");
+
+      expect(() => context.pathPolicy.resolveExisting(".ENV")).toThrowError(
+        expect.objectContaining({ code: "protected_file" })
+      );
+    }
+  );
 
   it("requires one edit match and keeps the original file when atomic replacement fails", async () => {
     const context = makeContext();

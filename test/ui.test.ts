@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { PassThrough, Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,6 +88,17 @@ function textResponse(text: string): LlmResponse {
       content: text,
       toolCalls: [],
       finishReason: "stop"
+    }
+  };
+}
+
+function toolResponse(call: ToolCall): LlmResponse {
+  return {
+    message: {
+      role: "assistant",
+      content: "",
+      toolCalls: [call],
+      finishReason: "tool_calls"
     }
   };
 }
@@ -218,6 +229,88 @@ describe("slash commands and terminal task lifecycle", () => {
         (message) => message.role === "tool" && message.toolCallId === "finish-1"
       ));
     expect(completedSnapshot).toBeDefined();
+  });
+
+  it("recovers a pending tool before enforcing repeated-call termination", async () => {
+    const workspace = temporaryDirectory("picode-ui-recovery-workspace-");
+    const root = temporaryDirectory("picode-ui-recovery-root-");
+    const seedStore = new SessionStore({
+      workspaceRoot: workspace,
+      rootDir: root,
+      redactionSecrets: ["ui-test-secret"]
+    });
+    const session = seedStore.create("recovery and limits");
+    const pendingCall: ToolCall = {
+      id: "crashed-write",
+      name: "write_file",
+      rawArguments: JSON.stringify({ path: "recovered.txt", content: "crash" }),
+      arguments: { path: "recovered.txt", content: "crash" }
+    };
+    const pendingAssistant: AssistantMessage = {
+      role: "assistant",
+      content: "",
+      toolCalls: [pendingCall],
+      finishReason: "tool_calls"
+    };
+    seedStore.save({
+      ...session,
+      messages: [pendingAssistant],
+      task: { state: "executing_tool" },
+      pendingTool: {
+        toolCallId: pendingCall.id,
+        toolName: pendingCall.name,
+        startedAt: new Date().toISOString()
+      }
+    });
+
+    const retryCall = (id: string): ToolCall => ({
+      id,
+      name: "write_file",
+      rawArguments: JSON.stringify({ path: "recovered.txt", content: "retry" }),
+      arguments: { path: "recovered.txt", content: "retry" }
+    });
+    const provider = new ScriptedLlmProvider([
+      { response: toolResponse(retryCall("retry-1")) },
+      { response: toolResponse(retryCall("retry-2")) },
+      { response: toolResponse(retryCall("retry-3")) }
+    ]);
+    const { app, store } = createApp(workspace, root, provider);
+    const recovered = await app.initialize();
+    const target = join(workspace, "recovered.txt");
+
+    expect(recovered.pendingTool).toBeUndefined();
+    expect(recovered.task).toMatchObject({
+      state: "aborted",
+      terminalState: "aborted",
+      reason: "aborted"
+    });
+    expect(recovered.messages.at(-1)).toMatchObject({
+      role: "tool",
+      toolCallId: "crashed-write"
+    });
+    expect(existsSync(target)).toBe(false);
+
+    const result = await app.runTask("retry the recovered write");
+    const saved = store.load(recovered.id);
+    const toolMessages = result.messages.filter((message) => message.role === "tool");
+
+    expect(result.terminalState).toBe("limit_reached");
+    expect(result.reason).toBe("limit_reached");
+    expect(provider.requests).toHaveLength(3);
+    expect(readFileSync(target, "utf8")).toBe("retry");
+    expect(toolMessages.map((message) => message.toolCallId)).toEqual([
+      "crashed-write",
+      "retry-1",
+      "retry-2",
+      "retry-3"
+    ]);
+    expect(toolMessages[0]?.content).toContain("side-effect state is unknown");
+    expect(toolMessages.at(-1)?.content).toContain("batch_rejected");
+    expect(saved.task).toMatchObject({
+      state: "limit_reached",
+      terminalState: "limit_reached",
+      reason: "limit_reached"
+    });
   });
 
   it("supports new/list/resume/exit and refuses session changes while busy", async () => {

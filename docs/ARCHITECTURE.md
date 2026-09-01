@@ -270,7 +270,7 @@ Shell runner 使用 child process、AbortSignal、60 秒 timeout 和独立 stdou
 
 MVP 只可用少量明显关键词追加“可能访问网络”的提示，不构建 shell parser 或多级风险系统。所有命令无论风险标签都必须审批。
 
-子进程环境从运行所需基础环境构造，并显式移除 `PICODE_API_KEY`。审批后的命令仍可读取文件系统、访问网络或修改工作区外内容，因此不是沙箱。
+子进程环境从当前用户环境复制，并显式移除 `PICODE_*` 和 `OPENAI_API_KEY`。审批后的命令仍可读取文件系统、访问网络或修改工作区外内容，因此不是沙箱。
 
 ## 8. Context Budget
 
