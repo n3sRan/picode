@@ -92,6 +92,29 @@ function basicRequest() {
   };
 }
 
+function pendingAfterFirstChunk(): {
+  stream: AsyncIterable<ChatCompletionChunk>;
+  waiting: Promise<void>;
+  release: () => void;
+} {
+  let releaseWaiting: () => void = () => undefined;
+  let markWaiting: () => void = () => undefined;
+  const waiting = new Promise<void>((resolve) => {
+    markWaiting = resolve;
+  });
+  const stream: AsyncIterable<ChatCompletionChunk> = {
+    async *[Symbol.asyncIterator]() {
+      yield makeChunk({ role: "assistant", content: "first" });
+      await new Promise<void>((resolve) => {
+        releaseWaiting = resolve;
+        markWaiting();
+      });
+      yield makeChunk({ content: "late" }, "stop");
+    }
+  };
+  return { stream, waiting, release: () => releaseWaiting() };
+}
+
 describe("OpenAIChatProvider", () => {
   it("streams text deltas, aggregates the assistant message, and records usage", async () => {
     const { provider, create } = makeProvider([
@@ -314,10 +337,11 @@ describe("OpenAIChatProvider", () => {
   });
 
   it("normalizes provider timeout and caller cancellation", async () => {
+    const create = vi.fn(() => new Promise<AsyncIterable<ChatCompletionChunk>>(() => undefined));
     const neverResolvingClient: ChatCompletionsClient = {
       chat: {
         completions: {
-          create: vi.fn(() => new Promise<AsyncIterable<ChatCompletionChunk>>(() => undefined))
+          create
         }
       }
     };
@@ -333,13 +357,90 @@ describe("OpenAIChatProvider", () => {
       kind: "timeout",
       message: "LLM request timed out"
     });
+    expect(create).toHaveBeenCalledOnce();
 
     const controller = new AbortController();
+    const pending = timeoutProvider.complete({ ...basicRequest(), signal: controller.signal });
+    expect(create).toHaveBeenCalledTimes(2);
     controller.abort();
-    await expect(timeoutProvider.complete({ ...basicRequest(), signal: controller.signal })).rejects.toMatchObject({
+    await expect(pending).rejects.toMatchObject({
       kind: "cancelled",
       message: "LLM request cancelled"
     });
+    expect(create.mock.calls[1]?.[1]?.signal?.aborted).toBe(true);
+
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort();
+    await expect(timeoutProvider.complete({
+      ...basicRequest(),
+      signal: alreadyAborted.signal
+    })).rejects.toMatchObject({
+      kind: "cancelled",
+      message: "LLM request cancelled"
+    });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops consuming a stream after caller cancellation", async () => {
+    const pendingStream = pendingAfterFirstChunk();
+    const create = vi.fn(async () => pendingStream.stream);
+    const provider = new OpenAIChatProvider({
+      apiKey: "phase1-test-credential",
+      baseUrl: "https://gateway.example/v1",
+      model: "test-model",
+      client: {
+        chat: { completions: { create } }
+      },
+      requestTimeoutMs: 1_000
+    });
+    const controller = new AbortController();
+    const deltas: string[] = [];
+    const pending = provider.complete(
+      { ...basicRequest(), signal: controller.signal },
+      { onTextDelta: (delta) => deltas.push(delta) }
+    );
+
+    await pendingStream.waiting;
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({
+      kind: "cancelled",
+      message: "LLM request cancelled"
+    });
+    pendingStream.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(deltas).toEqual(["first"]);
+  });
+
+  it("stops consuming a stream when the request timeout fires", async () => {
+    const pendingStream = pendingAfterFirstChunk();
+    const provider = new OpenAIChatProvider({
+      apiKey: "phase1-test-credential",
+      baseUrl: "https://gateway.example/v1",
+      model: "test-model",
+      client: {
+        chat: {
+          completions: {
+            create: vi.fn(async () => pendingStream.stream)
+          }
+        }
+      },
+      requestTimeoutMs: 10
+    });
+    const deltas: string[] = [];
+    const pending = provider.complete(basicRequest(), {
+      onTextDelta: (delta) => deltas.push(delta)
+    });
+
+    await pendingStream.waiting;
+    await expect(pending).rejects.toMatchObject({
+      kind: "timeout",
+      message: "LLM request timed out"
+    });
+    pendingStream.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(deltas).toEqual(["first"]);
   });
 });
 

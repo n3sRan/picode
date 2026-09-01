@@ -42,6 +42,36 @@ interface ToolCallAccumulator {
   rawArguments: string;
 }
 
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("request aborted");
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw abortReason(signal);
+  }
+}
+
+async function raceWithAbort<T>(operation: () => PromiseLike<T>, signal: AbortSignal): Promise<T> {
+  throwIfAborted(signal);
+
+  let removeAbortListener: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
+
+  try {
+    return await Promise.race([operation(), abortPromise]);
+  } finally {
+    removeAbortListener?.();
+  }
+}
+
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -217,50 +247,36 @@ export class OpenAIChatProvider implements LlmProvider {
   }
 
   public async complete(request: LlmRequest, handlers: LlmStreamHandlers = {}): Promise<LlmResponse> {
-    const controller = new AbortController();
+    const timeoutController = new AbortController();
     let timedOut = false;
-    let externallyAborted = false;
     const externalSignal = request.signal;
-    const onExternalAbort = () => {
-      externallyAborted = true;
-      controller.abort(externalSignal?.reason);
-    };
-    if (externalSignal?.aborted) {
-      onExternalAbort();
-    } else {
-      externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
-    }
+    const requestSignal = externalSignal === undefined
+      ? timeoutController.signal
+      : AbortSignal.any([externalSignal, timeoutController.signal]);
 
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
-      controller.abort(new Error("request timeout"));
+      timeoutController.abort(new Error("request timeout"));
     }, this.requestTimeoutMs);
 
-    let rejectAbort: ((reason?: unknown) => void) | undefined;
-    const abortPromise = new Promise<never>((_, reject) => {
-      rejectAbort = reject;
-    });
-    const onControllerAbort = () => {
-      rejectAbort?.(controller.signal.reason ?? new Error("request aborted"));
-    };
-    controller.signal.addEventListener("abort", onControllerAbort, { once: true });
-    if (controller.signal.aborted) {
-      onControllerAbort();
-    }
-
     try {
+      throwIfAborted(requestSignal);
       const requestBody = this.buildRequestBody(request);
-      const stream = await Promise.race([
-        this.client.chat.completions.create(requestBody, { signal: controller.signal }),
-        abortPromise
-      ]);
-      return await Promise.race([this.consumeStream(stream, handlers), abortPromise]);
+      const stream = await raceWithAbort(
+        () => this.client.chat.completions.create(requestBody, { signal: requestSignal }),
+        requestSignal
+      );
+      return await raceWithAbort(
+        () => this.consumeStream(stream, handlers, requestSignal),
+        requestSignal
+      );
     } catch (error) {
-      throw normalizeLlmProviderError(error, { externallyAborted, timedOut });
+      throw normalizeLlmProviderError(error, {
+        externallyAborted: externalSignal?.aborted === true,
+        timedOut
+      });
     } finally {
       clearTimeout(timeoutHandle);
-      externalSignal?.removeEventListener("abort", onExternalAbort);
-      controller.signal.removeEventListener("abort", onControllerAbort);
     }
   }
 
@@ -281,7 +297,8 @@ export class OpenAIChatProvider implements LlmProvider {
 
   private async consumeStream(
     stream: AsyncIterable<ChatCompletionChunk>,
-    handlers: LlmStreamHandlers
+    handlers: LlmStreamHandlers,
+    signal: AbortSignal
   ): Promise<LlmResponse> {
     let content = "";
     let finishReason: LlmFinishReason | undefined;
@@ -289,11 +306,14 @@ export class OpenAIChatProvider implements LlmProvider {
     const toolCallAccumulators = new Map<number, ToolCallAccumulator>();
 
     for await (const chunk of stream) {
+      throwIfAborted(signal);
       validateChunk(chunk);
       const chunkUsage = normalizeUsage(chunk.usage);
       if (chunkUsage !== undefined) {
+        throwIfAborted(signal);
         usage = chunkUsage;
         await handlers.onUsage?.(chunkUsage);
+        throwIfAborted(signal);
       }
 
       const choice = chunk.choices.find((candidate) => candidate.index === 0);
@@ -308,10 +328,13 @@ export class OpenAIChatProvider implements LlmProvider {
         if (typeof choice.delta.content !== "string") {
           throw protocolError("content delta must be a string");
         }
+        throwIfAborted(signal);
         content += choice.delta.content;
         await handlers.onTextDelta?.(choice.delta.content);
+        throwIfAborted(signal);
       }
       for (const fragment of choice.delta.tool_calls ?? []) {
+        throwIfAborted(signal);
         addToolCallFragment(toolCallAccumulators, fragment);
       }
 
@@ -324,6 +347,7 @@ export class OpenAIChatProvider implements LlmProvider {
       }
     }
 
+    throwIfAborted(signal);
     if (finishReason === undefined) {
       throw protocolError("finish_reason is missing");
     }
