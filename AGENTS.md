@@ -12,6 +12,7 @@
 
 ## 当前 MVP 范围
 
+- 当前状态：Phase 0-9 已完成，MVP 已封板；成品通过 npm tarball 发布，视频和真实 API smoke run 仍按需人工执行。
 - TypeScript、ESM、Node.js 22+，目标平台为 macOS/Linux。
 - 交互式 CLI 与 `picode "任务"` 单任务模式。
 - 默认以启动时的 cwd 为工作区，支持 `picode --cwd <path>`。
@@ -100,6 +101,7 @@
 - 开发仓库是当前 Git 仓库根目录。
 - 真实 E2E 应在仓库外的 `<repo-parent>/demo` 或同级临时演示目录运行。
 - 不得在开发仓库或参考项目中产生演示任务文件。
+- 发布成品使用 `npm run pack:release` 生成的本地 tarball；目标机器需要 Node.js 22+，不要把 `.env` 或 session 数据打包。
 - 完整 E2E 必须通过本地打包并安装后的 `picode` bin 入口运行，不能直接调用内部模块。
 - 每新增一批测试文件后，必须向用户解释测试目标、覆盖场景、关键断言、未覆盖风险和运行方式。
 - 真实 API 测试必须显式运行；缺少凭据时安全跳过。

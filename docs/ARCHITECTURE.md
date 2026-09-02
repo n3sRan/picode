@@ -415,6 +415,10 @@ renderer 的两种模式遵循以下规则：
 
 历史回放只读取 session 快照中的 user、assistant 和 tool 消息，隐藏 system 消息且不执行历史工具。assistant 非空文本和工具信息沿用当前 verbose/非 verbose renderer 规则；快照没有逐轮 event log，因此不伪造旧的 `[usage]` 或 `[context]`。
 
+### 10.2 发布形态
+
+发布入口是 npm tarball。`npm run pack:release` 先将 TypeScript 编译到 `dist/`，再依据 `package.json` 的 `bin` 和 `files` 生成包；安装包提供 `picode` 命令并安装 `openai` 生产依赖。Node.js 运行时不随包分发，目标环境需要 Node.js 22+。源码、测试、真实 `.env` 和 session 数据不进入发布包。
+
 ## 11. 测试边界
 
 以下接口必须可替换：

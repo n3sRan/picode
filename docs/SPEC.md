@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 状态：已确认
+- 状态：MVP 已完成
 - 产品名称与 CLI 命令：`picode`
 - 开发仓库：当前 Git 仓库根目录
 - 目标平台：macOS/Linux，Node.js 22+
@@ -123,6 +123,12 @@
 - `aborted` / `130`：用户中断
 
 终态结束一次用户任务，不关闭交互式 CLI。用户继续输入时在同一 session 中创建新的任务段，并重置逐任务计数。
+
+### 4.4 构建与发布
+
+成品以 npm tarball 发布，不打包 Node.js 运行时；目标机器必须安装 Node.js 22 或更高版本。仓库根目录执行 `npm ci` 后运行 `npm run pack:release`，先构建 `dist/`，再生成 `picode-0.1.0.tgz`。`npm pack --dry-run` 可检查发布文件清单。
+
+发布包通过 `package.json` 的 `bin.picode` 暴露 CLI，包含 `dist/`、README、`.env.example` 和生产依赖元数据，不包含源码、测试、真实 `.env` 或 session 数据。目标机器可执行 `npm install --global /absolute/path/to/picode-0.1.0.tgz` 安装，随后直接使用 `picode` 命令。API Key 应通过进程环境变量或启动目录中的 `.env` 提供，不应写入发布包。
 
 ## 5. LLM 网关
 

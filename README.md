@@ -57,6 +57,42 @@ picode --cwd /path/to/workspace "检查并修复这个项目"
 picode --help
 ```
 
+## 打包为成品软件
+
+`picode` 的成品发布形式是带 `picode` CLI 入口的 npm tarball，不是内置 Node.js 运行时的原生单文件程序；目标机器需要 Node.js 22 或更高版本。
+
+在仓库根目录执行：
+
+```bash
+npm ci
+npm run pack:release
+```
+
+该命令会先构建 TypeScript，再生成 `picode-0.1.0.tgz`。发布前可用下面的命令检查 tarball 内容：
+
+```bash
+npm pack --dry-run
+```
+
+tarball 包含编译后的 `dist/`、`README.md`、`.env.example` 和生产依赖元数据，不包含 `src/`、测试、`.env` 或 session 数据。
+
+在目标机器安装并运行：
+
+```bash
+npm install --global /absolute/path/to/picode-0.1.0.tgz
+picode --help
+picode --cwd /path/to/workspace "检查并修复这个项目"
+```
+
+也可以不做全局安装，在指定目录使用本地 bin：
+
+```bash
+npm install --prefix /path/to/picode-runtime /absolute/path/to/picode-0.1.0.tgz
+/path/to/picode-runtime/node_modules/.bin/picode --help
+```
+
+运行前通过环境变量设置 `PICODE_API_KEY`，或在启动命令所在目录放置 `.env`；不要把真实 `.env` 打进 tarball。开发阶段的 `npm link` 仅用于本地联调，不是发布流程。卸载全局版本使用 `npm uninstall --global picode`。
+
 ## 配置
 
 配置优先级为：进程环境变量 > 启动目录中的 `.env` > 代码默认值。程序只读取以下八个配置项，不会把 `.env` 的其他内容注入子进程环境。
