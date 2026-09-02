@@ -5,7 +5,7 @@
 - 当前状态：Phase 0-5 已完成，Phase 6 进行中（限制与文件搜索边界、基础结构清理、LLM 运行参数配置、取消/超时处理、批次调用关联、macOS 大小写路径保护和恢复/限制回归测试已完成，下一批待定）。
 - Phase 7 已开始：批次 H（`finish` 后上下文计量）、I（显式 `/compact`）和 J（默认关闭的自动压缩）已完成，下一步进行全量回归与隔离演示复核。
 - Phase 8 已实现：终端 verbose 控制与 finish/context 输出重构已完成，待打包视频流程复核。
-- Phase 9 已确认需求：启动 session 选择与历史回放，尚未开始实现。
+- Phase 9 已实现：启动 session 选择与历史回放完成，已覆盖默认新建、显式恢复、无 session 报错和 verbose 历史展示规则。
 - 优先完成可解释、可测试的 MVP，不以生产级完整性为目标。
 - 每个阶段都必须保持可构建、可测试。
 - 可选增强只能在全部 MVP 验收通过后开始。
@@ -224,7 +224,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 - 已扩展 BudgetTracker 的当前上下文计算接口和 `AgentRunResult`/事件数据；
 - 已在 finish tool result 写入后计算度量，并让 renderer 将其作为终态后的独立 `[context]` 信息；
 - 已覆盖 usage anchor、fallback、tool schema、finish result、终态顺序和“不得增加请求”的行为；
-- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`；批次 H 当时 82 个测试通过，当前全量回归为 101 个测试通过。
+- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`；批次 H 当时 82 个测试通过，Phase 9 完成后的当前全量回归为 107 个测试通过。
 
 批次 I：ContextCompactor 与显式 `/compact`（已完成）。
 
@@ -297,7 +297,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 
 ## 12. Phase 9：启动 session 选择与历史回放
 
-状态：已确认，待实现。
+状态：已实现。
 
 目标是让 session 的选择语义与主流 coding agent 一致：普通启动从新 session 开始，只有显式恢复请求才加载旧 session；恢复成功后让用户看到一次已有对话历史，同时不引入事件溯源或重新执行副作用。
 
@@ -312,11 +312,11 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 
 ### 12.2 实现批次
 
-- 扩展 CLI 参数解析、帮助文本和启动组合校验，增加 `--resume [<id>]`，明确与任务文本互斥。
-- 将 `TerminalApp` 的默认初始化从“自动加载 latest”改为“默认新建”；为显式 resume 传入最近或指定 session。
-- 在 `/resume` 和 CLI resume 路径中复用同一套历史回放逻辑；恢复 pending tool 时先保持“不重放副作用”的既有安全边界。
-- 在 renderer 增加 session message/history 渲染入口：过滤 system，跳过空 assistant 文本，工具按 verbose 状态输出；不伪造 usage/context event。
-- 同步 README、SPEC、ARCHITECTURE、AGENTS 和帮助文本，明确恢复请求无 session 时的错误行为。
+- 已扩展 CLI 参数解析、帮助文本和启动组合校验，增加 `--resume [<id>]`，明确与任务文本互斥。
+- 已将 `TerminalApp` 的默认初始化从“自动加载 latest”改为“默认新建”；显式 resume 可选择最近或指定 session。
+- 已在 `/resume` 和 CLI resume 路径中复用同一套历史回放逻辑；恢复 pending tool 时保持“不重放副作用”的既有安全边界。
+- 已在 renderer 增加 session message/history 渲染入口：过滤 system，跳过空 assistant 文本，工具按 verbose 状态输出；不伪造 usage/context event。
+- 已同步 README、SPEC、ARCHITECTURE、AGENTS 和帮助文本，明确恢复请求无 session 时的错误行为。
 
 ### 12.3 验收与测试
 
@@ -332,7 +332,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 - 默认启动、显式恢复和交互恢复的 session 选择语义与文档一致。
 - 恢复历史只展示一次、无历史工具重放或副作用，输出遵循 verbose 规则。
 - 无 session、无效/歧义 ID 和非法参数组合均能在 LLM 请求前失败。
-- build、typecheck、全量确定性测试通过，并在仓库外打包 bin 中手动复核新建、恢复和历史展示流程。
+- build、typecheck、全量确定性测试通过；仓库外打包 bin 的新建、恢复和历史展示流程仍需作为视频前的手动复核项。
 
 ## 13. 可选增强门
 

@@ -102,7 +102,7 @@ picode [--cwd <path>] [--verbose] --resume [<id>]
 
 终端输出详细度默认关闭。启动时使用 `--verbose` 或交互中输入 `/verbose` 开启完整输出，使用 `/verbose off` 关闭。关闭时普通工具只在完成后显示工具名和执行状态的一行，finish 只显示最终状态；每轮 `[usage]` 隐藏，但 finish 后的独立 `[context]` 信息始终显示。该开关只在当前进程内生效，不写入 session。
 
-会话启动与历史回放契约已确认，当前待实现：`--resume` 不能和任务文本同时使用；没有可恢复 session 时直接报错退出。恢复时只回放快照中的 user、assistant 和 tool 消息，system 消息不显示，历史工具不会重新执行，也不补造旧的每轮 `[usage]` 或 `[context]`。
+会话启动与历史回放已实现：`--resume` 不能和任务文本同时使用；没有可恢复 session 时直接报错退出。恢复时只回放快照中的 user、assistant 和 tool 消息，system 消息不显示，历史工具不会重新执行，也不补造旧的每轮 `[usage]` 或 `[context]`；快照中的终态会按当前输出模式恢复显示。
 
 单任务模式的退出码：
 

@@ -12,6 +12,7 @@ import type { ToolResult } from "../tools/types.js";
 import {
   recoverPendingTool,
   SessionStore,
+  SessionStoreError,
   type SessionSnapshot,
   type SessionTaskSnapshot
 } from "../sessions/index.js";
@@ -95,11 +96,24 @@ export class TerminalApp {
     return this.busy;
   }
 
-  public async initialize(options: { newSession?: boolean } = {}): Promise<SessionSnapshot> {
+  public async initialize(options: { newSession?: boolean; resume?: string } = {}): Promise<SessionSnapshot> {
+    if (options.resume !== undefined) {
+      if (options.newSession === true) {
+        throw new SessionStoreError("Cannot create and resume a session at the same time");
+      }
+      const session = options.resume.length === 0
+        ? this.sessionStore.latest()
+        : this.sessionStore.load(options.resume);
+      if (session === undefined) {
+        throw new SessionStoreError("No sessions available to resume");
+      }
+      this.currentSession = session;
+      this.recoverCurrentSession();
+      return this.currentSession;
+    }
+
     if (options.newSession === true || this.currentSession === undefined) {
-      this.currentSession = options.newSession === true
-        ? this.sessionStore.create("Task session")
-        : this.sessionStore.latest() ?? this.sessionStore.create("New session");
+      this.currentSession = this.sessionStore.create(options.newSession === true ? "Task session" : "New session");
       this.recoverCurrentSession();
     }
     return this.currentSession;
@@ -179,9 +193,16 @@ export class TerminalApp {
     }
   }
 
-  public async runInteractive(): Promise<number> {
-    await this.initialize();
+  public async runInteractive(options: { resume?: string } = {}): Promise<number> {
+    if (options.resume !== undefined) {
+      await this.initialize({ resume: options.resume });
+    } else {
+      await this.initialize();
+    }
     this.renderer.renderSessionHeader(this.shortSessionId(), this.currentSession!.name);
+    if (options.resume !== undefined) {
+      this.renderer.renderSessionHistory(this.currentSession!.messages, this.currentSession!.task);
+    }
     try {
       while (!this.exiting) {
         const line = await this.readLine();
@@ -225,9 +246,9 @@ export class TerminalApp {
           this.writeSessionList();
           return;
         case "resume_session":
-          this.currentSession = this.sessionStore.load(command.identifier);
-          this.recoverCurrentSession();
+          await this.initialize({ resume: command.identifier });
           this.renderer.renderInfo("Resumed session " + this.shortSessionId() + ".");
+          this.renderer.renderSessionHistory(this.currentSession!.messages, this.currentSession!.task);
           return;
         case "compact":
           await this.compactCurrentSession();

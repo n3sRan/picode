@@ -184,6 +184,77 @@ describe("TerminalRenderer", () => {
     expect(output.text.match(/\[assistant\]/g)).toHaveLength(1);
   });
 
+  it("replays session history using verbose and concise output rules", () => {
+    const finish = finishToolCall();
+    const messages = [
+      { role: "system", content: "hidden system prompt" },
+      { role: "user", content: "Inspect the project" },
+      {
+        role: "assistant",
+        content: "I inspected the project.",
+        toolCalls: [toolCall()],
+        finishReason: "tool_calls"
+      },
+      { role: "tool", toolCallId: "call-1", toolName: "read_file", content: "file contents" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [finish],
+        finishReason: "tool_calls"
+      },
+      {
+        role: "tool",
+        toolCallId: finish.id,
+        toolName: "finish",
+        content: JSON.stringify({ accepted: true, status: "success", summary: "done" })
+      }
+    ] as const;
+
+    const verboseOutput = new CaptureWritable();
+    const verboseRenderer = new TerminalRenderer({
+      output: verboseOutput,
+      errorOutput: new CaptureWritable(),
+      color: false,
+      verbose: true
+    });
+    verboseRenderer.renderSessionHistory(messages, { terminalState: "completed", message: "done" });
+
+    expect(verboseOutput.text).toContain("[user]\n  Inspect the project");
+    expect(verboseOutput.text).toContain("[assistant]\nI inspected the project.");
+    expect(verboseOutput.text).toContain("[tool] read_file");
+    expect(verboseOutput.text).toContain("arguments: {\"path\":\"src/index.ts\"}");
+    expect(verboseOutput.text).toContain("[tool result] read_file ok");
+    expect(verboseOutput.text).toContain("file contents");
+    expect(verboseOutput.text).toContain("[tool] finish");
+    expect(verboseOutput.text).toContain("[tool result] finish ok");
+    expect(verboseOutput.text).toContain("[completed] done");
+    expect(verboseOutput.text.match(/\[assistant\]/g)).toHaveLength(1);
+    expect(verboseOutput.text).not.toContain("hidden system prompt");
+    expect(verboseOutput.text).not.toContain("[usage]");
+    expect(verboseOutput.text).not.toContain("[context]");
+
+    const conciseOutput = new CaptureWritable();
+    const conciseRenderer = new TerminalRenderer({
+      output: conciseOutput,
+      errorOutput: new CaptureWritable(),
+      color: false
+    });
+    conciseRenderer.renderSessionHistory(messages, { terminalState: "completed", message: "done" });
+
+    expect(conciseOutput.text).toContain("[user]\n  Inspect the project");
+    expect(conciseOutput.text).toContain("[assistant]\nI inspected the project.");
+    expect(conciseOutput.text).toContain("[tool] read_file ok");
+    expect(conciseOutput.text).not.toContain("[tool] finish");
+    expect(conciseOutput.text).not.toContain("[tool result]");
+    expect(conciseOutput.text).not.toContain("call_id:");
+    expect(conciseOutput.text).not.toContain("arguments:");
+    expect(conciseOutput.text).not.toContain("file contents");
+    expect(conciseOutput.text).toContain("[completed] done");
+    expect(conciseOutput.text.match(/\[assistant\]/g)).toHaveLength(1);
+    expect(conciseOutput.text).not.toContain("[usage]");
+    expect(conciseOutput.text).not.toContain("[context]");
+  });
+
   it("uses ANSI colors only when explicitly enabled", () => {
     const coloredOutput = new CaptureWritable();
     const coloredRenderer = new TerminalRenderer({

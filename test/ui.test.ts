@@ -185,6 +185,147 @@ describe("slash commands and terminal task lifecycle", () => {
     expect(() => parseCliCommand("/unknown")).toThrowError(CliCommandError);
   });
 
+  it("creates a new session by default instead of loading the latest session", async () => {
+    const workspace = temporaryDirectory("picode-ui-new-session-workspace-");
+    const root = temporaryDirectory("picode-ui-new-session-root-");
+    const input = new PassThrough();
+    const output = new CaptureWritable();
+    const { app, store } = createApp(
+      workspace,
+      root,
+      new ScriptedLlmProvider([]),
+      output,
+      new CaptureWritable(),
+      input
+    );
+    const existing = store.create("existing session");
+
+    const running = app.runInteractive();
+    input.end("/exit\n");
+    await running;
+    const created = app.getSession()!;
+
+    expect(created.id).not.toBe(existing.id);
+    expect(created.name).toBe("New session");
+    expect(store.list()).toHaveLength(2);
+    expect(output.text).toContain("New session");
+    expect(output.text).not.toContain("existing session");
+  });
+
+  it("resumes the latest session from the CLI and replays history without an LLM request", async () => {
+    const startupDir = temporaryDirectory("picode-cli-resume-startup-");
+    const workspace = temporaryDirectory("picode-cli-resume-workspace-");
+    const root = temporaryDirectory("picode-cli-resume-root-");
+    const seedStore = new SessionStore({
+      workspaceRoot: workspace,
+      rootDir: root,
+      redactionSecrets: ["ui-test-secret"]
+    });
+    const session = seedStore.create("resumable session");
+    const readCall: ToolCall = {
+      id: "history-read",
+      name: "read_file",
+      rawArguments: JSON.stringify({ path: "README.md" }),
+      arguments: { path: "README.md" }
+    };
+    const finish = finishResponse().message.toolCalls[0]!;
+    seedStore.save({
+      ...session,
+      messages: [
+        { role: "system", content: "hidden system prompt" },
+        { role: "user", content: "Summarize the project" },
+        { role: "assistant", content: "I inspected the project.", toolCalls: [readCall], finishReason: "tool_calls" },
+        { role: "tool", toolCallId: readCall.id, toolName: readCall.name, content: "project contents" },
+        { role: "assistant", content: "The project is summarized.", toolCalls: [finish], finishReason: "tool_calls" },
+        { role: "tool", toolCallId: finish.id, toolName: finish.name, content: JSON.stringify({ accepted: true, status: "success", summary: "done" }) }
+      ],
+      usage: { promptTokens: 42 },
+      task: { state: "completed", terminalState: "completed", reason: "finish_success", message: "done" }
+    });
+
+    const input = new PassThrough();
+    const output = new CaptureWritable();
+    const errorOutput = new CaptureWritable();
+    const provider = new ScriptedLlmProvider([]);
+    const running = main(["--cwd", workspace, "--resume"], {
+      startupDir,
+      env: { PICODE_API_KEY: "ui-test-secret", PICODE_MODEL: "test-model" },
+      input,
+      stdout: output,
+      stderr: errorOutput,
+      sessionRoot: root,
+      provider,
+      isInteractive: false
+    });
+    input.end("/exit\n");
+    const exitCode = typeof running === "number" ? running : await running;
+
+    expect(exitCode).toBe(0);
+    expect(provider.requests).toHaveLength(0);
+    expect(output.text).toContain("resumable session");
+    expect(output.text).toContain("[user]\n  Summarize the project");
+    expect(output.text).toContain("[assistant]\nI inspected the project.");
+    expect(output.text).toContain("[tool] read_file ok");
+    expect(output.text).not.toContain("[tool] finish");
+    expect(output.text).not.toContain("[tool result]");
+    expect(output.text).toContain("[completed] done");
+    expect(output.text).not.toContain("hidden system prompt");
+    expect(output.text).not.toContain("[usage]");
+    expect(output.text).not.toContain("[context]");
+    expect(errorOutput.text).toBe("");
+  });
+
+  it("resumes the explicitly selected session from the CLI", async () => {
+    const startupDir = temporaryDirectory("picode-cli-resume-id-startup-");
+    const workspace = temporaryDirectory("picode-cli-resume-id-workspace-");
+    const root = temporaryDirectory("picode-cli-resume-id-root-");
+    const seedStore = new SessionStore({ workspaceRoot: workspace, rootDir: root });
+    const selected = seedStore.create("selected session");
+    seedStore.create("other session");
+    const input = new PassThrough();
+    const output = new CaptureWritable();
+    const errorOutput = new CaptureWritable();
+    const running = main(["--cwd", workspace, "--resume", selected.id], {
+      startupDir,
+      env: { PICODE_API_KEY: "ui-test-secret" },
+      input,
+      stdout: output,
+      stderr: errorOutput,
+      sessionRoot: root,
+      provider: new ScriptedLlmProvider([]),
+      isInteractive: false
+    });
+    input.end("/exit\n");
+    const exitCode = typeof running === "number" ? running : await running;
+
+    expect(exitCode).toBe(0);
+    expect(output.text).toContain("selected session");
+    expect(output.text).not.toContain("other session");
+    expect(errorOutput.text).toBe("");
+  });
+
+  it("fails --resume before entering interactive mode when no session exists", async () => {
+    const startupDir = temporaryDirectory("picode-cli-resume-empty-startup-");
+    const workspace = temporaryDirectory("picode-cli-resume-empty-workspace-");
+    const root = temporaryDirectory("picode-cli-resume-empty-root-");
+    const output = new CaptureWritable();
+    const errorOutput = new CaptureWritable();
+    const running = main(["--cwd", workspace, "--resume"], {
+      startupDir,
+      env: { PICODE_API_KEY: "ui-test-secret" },
+      stdout: output,
+      stderr: errorOutput,
+      sessionRoot: root,
+      provider: new ScriptedLlmProvider([]),
+      isInteractive: false
+    });
+    const exitCode = typeof running === "number" ? running : await running;
+
+    expect(exitCode).toBe(1);
+    expect(errorOutput.text).toContain("No sessions available to resume");
+    expect(output.text).toBe("");
+  });
+
   it("toggles verbose output for the current process", async () => {
     const workspace = temporaryDirectory("picode-ui-verbose-workspace-");
     const root = temporaryDirectory("picode-ui-verbose-root-");
@@ -321,7 +462,7 @@ describe("slash commands and terminal task lifecycle", () => {
       { response: toolResponse(retryCall("retry-3")) }
     ]);
     const { app, store } = createApp(workspace, root, provider);
-    const recovered = await app.initialize();
+    const recovered = await app.initialize({ resume: session.id });
     const target = join(workspace, "recovered.txt");
 
     expect(recovered.pendingTool).toBeUndefined();
@@ -366,14 +507,27 @@ describe("slash commands and terminal task lifecycle", () => {
       { response: textResponse("working"), delayMs: 30 },
       { response: finishResponse() }
     ]);
-    const { app, output, errorOutput } = createApp(workspace, root, provider);
+    const { app, store, output, errorOutput } = createApp(workspace, root, provider);
 
     await app.handleLine("/new first session");
     const firstId = app.getSession()!.id;
+    const firstSession = store.load(firstId);
+    store.save({
+      ...firstSession,
+      messages: [
+        { role: "system", content: "hidden system prompt" },
+        { role: "user", content: "What happened?" },
+        { role: "assistant", content: "I checked the project.", toolCalls: [], finishReason: "stop" }
+      ],
+      task: { state: "idle" }
+    });
     await app.handleLine("/new second session");
     expect(app.getSession()!.name).toBe("second session");
     await app.handleLine("/resume " + firstId.slice(0, 8));
     expect(app.getSession()!.id).toBe(firstId);
+    expect(output.text).toContain("[user]\n  What happened?");
+    expect(output.text).toContain("[assistant]\nI checked the project.");
+    expect(output.text).not.toContain("hidden system prompt");
     await app.handleLine("/sessions");
     expect(output.text).toContain("first session");
     expect(output.text).toContain("second session");
@@ -419,7 +573,7 @@ describe("slash commands and terminal task lifecycle", () => {
       task: { state: "completed", terminalState: "completed", reason: "finish_success" }
     });
 
-    await app.initialize();
+    await app.initialize({ resume: session.id });
     await app.handleLine("/compact");
 
     const saved = store.load(session.id);
@@ -481,7 +635,7 @@ describe("slash commands and terminal task lifecycle", () => {
       isInteractive: false
     });
 
-    await app.initialize();
+    await app.initialize({ resume: session.id });
     await app.handleLine("/compact");
 
     const saved = store.load(session.id);
@@ -523,7 +677,7 @@ describe("slash commands and terminal task lifecycle", () => {
       task: { state: "completed", terminalState: "completed", reason: "finish_success" }
     });
 
-    await app.initialize();
+    await app.initialize({ resume: session.id });
     const result = await app.runTask("Current task");
 
     const saved = store.load(session.id);

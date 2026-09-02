@@ -7,7 +7,7 @@
 - 开发仓库：当前 Git 仓库根目录
 - 目标平台：macOS/Linux，Node.js 22+
 - 上下文增强状态：`finish` 后上下文计量、显式 `/compact`、可配置自动压缩和终端 verbose 控制均已实现
-- 会话启动与历史回放状态：需求已确认，待实现
+- 会话启动与历史回放状态：已实现
 
 本文定义截止日前必须完成的 MVP。最终两分钟演示题目和主要卖点在实现稳定后决定。
 
@@ -75,7 +75,7 @@
 - verbose 关闭时，finish 工具自身的 tool 与 tool result 不显示，只显示最终终态；verbose 开启时保持现有 finish 输出。
 - finish 终态后的上下文计量改为独立的 `[context]` 行，位于终态状态行之后，且两种 verbose 模式都显示。
 
-### 3.5 会话启动与历史回放（已确认，待实现）
+### 3.5 会话启动与历史回放（已实现）
 
 该批需求只改变 session 的选择和展示入口，不改变 Agent Loop、消息协议、工具执行安全边界或 session 快照格式：
 
@@ -84,7 +84,7 @@
 - `--resume` 仅用于恢复并进入交互模式，不允许和任务文本组合；当前 workspace 没有可恢复 session 时直接报错退出。
 - 交互 `/resume <id>` 恢复指定 session，并在恢复后将历史消息展示一次；`/resume` 仍要求 ID 或无歧义前缀。
 - 历史回放只展示快照中可重建的 user、assistant 和 tool 消息，隐藏 system 消息；不执行任何历史工具。
-- 历史中的 assistant 文本、普通工具和 finish 按当前 verbose/非 verbose 规则展示；不补造旧的每轮 `[usage]` 或 `[context]`，因为 session 不保存逐轮 event log。
+- 历史中的 assistant 文本、普通工具和 finish 按当前 verbose/非 verbose 规则展示；快照中的终态信息在无法从最后一个有效 finish 结果恢复时作为兜底显示；不补造旧的每轮 `[usage]` 或 `[context]`，因为 session 不保存逐轮 event log。
 
 ## 4. CLI
 

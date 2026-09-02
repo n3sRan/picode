@@ -1,6 +1,9 @@
 import type { Writable } from "node:stream";
 import type { ContextUsage } from "../domain/context.js";
 import type { AgentEvent } from "../domain/events.js";
+import type { Message, ToolCall, ToolResultMessage } from "../domain/messages.js";
+import type { TerminalState } from "../domain/state.js";
+import type { ToolExecutionStatus } from "../domain/tool.js";
 
 type Tone = "assistant" | "tool" | "approval" | "usage" | "success" | "warning" | "error" | "info";
 
@@ -64,6 +67,52 @@ function terminalTone(state: string): Tone {
   return state === "completed" ? "success" : state === "partial" || state === "limit_reached" ? "warning" : "error";
 }
 
+function isToolExecutionStatus(value: string): value is ToolExecutionStatus {
+  return value === "ok" || value === "error" || value === "permission_denied" || value === "aborted" ||
+    value === "timeout" || value === "interrupted" || value === "batch_rejected";
+}
+
+function historicalToolStatus(message: ToolResultMessage): ToolExecutionStatus {
+  const match = /^\[([a-z_]+)\](?:\s|$)/.exec(message.content);
+  return match !== null && match[1] !== undefined && isToolExecutionStatus(match[1]) ? match[1] : "ok";
+}
+
+function historicalToolContent(message: ToolResultMessage, status: ToolExecutionStatus): string {
+  const prefix = `[${status}] `;
+  return status !== "ok" && message.content.startsWith(prefix)
+    ? message.content.slice(prefix.length)
+    : message.content;
+}
+
+function finishTerminalState(argumentsValue: Record<string, unknown>): TerminalState | undefined {
+  switch (argumentsValue.status) {
+    case "success":
+      return "completed";
+    case "partial":
+      return "partial";
+    case "failure":
+      return "failed";
+    default:
+      return undefined;
+  }
+}
+
+function finishSummary(argumentsValue: Record<string, unknown>, state: TerminalState): string {
+  if (typeof argumentsValue.summary === "string" && argumentsValue.summary.length > 0) {
+    return argumentsValue.summary;
+  }
+  return state === "completed"
+    ? "Task completed."
+    : state === "partial"
+      ? "Task partially completed."
+      : "Task failed.";
+}
+
+interface HistoricalTaskState {
+  terminalState?: TerminalState;
+  message?: string;
+}
+
 /** Renders AgentEvents as structured terminal output without changing runtime state. */
 export class TerminalRenderer {
   private readonly output: Writable;
@@ -100,6 +149,73 @@ export class TerminalRenderer {
   public renderSessionHeader(sessionId: string, name: string): void {
     this.output.write(`${this.paint("picode", "info")} session ${sessionId} (${name})\n`);
     this.hasOutput = true;
+  }
+
+  public renderSessionHistory(messages: readonly Message[], task?: HistoricalTaskState): void {
+    this.finishAssistantText();
+    const toolCalls = new Map<string, ToolCall>();
+    let lastUserIndex = -1;
+    let lastFinishResult: { index: number; renderedTerminal: boolean } | undefined;
+
+    for (const [index, message] of messages.entries()) {
+      switch (message.role) {
+        case "system":
+          continue;
+        case "user":
+          lastUserIndex = index;
+          this.writeBlock("user", "info", "", [message.content]);
+          continue;
+        case "assistant":
+          if (message.content.length > 0) {
+            this.renderAssistantText(message.content);
+            this.finishAssistantText();
+          }
+          for (const toolCall of message.toolCalls) {
+            toolCalls.set(toolCall.id, toolCall);
+            this.renderToolRequested(toolCall);
+          }
+          continue;
+        case "tool": {
+          const status = historicalToolStatus(message);
+          const content = historicalToolContent(message, status);
+          if (this.verbose) {
+            this.writeBlock("tool result", resultTone(status), `${message.toolName} ${status}`, [
+              `call_id: ${truncate(message.toolCallId, MAX_DISPLAY_LENGTH)}`,
+              truncate(content, MAX_DISPLAY_LENGTH)
+            ]);
+          } else if (message.toolName !== "finish") {
+            this.writeBlock("tool", resultTone(status), `${message.toolName} ${status}`);
+          }
+
+          let renderedTerminal = false;
+          if (message.toolName === "finish" && status === "ok") {
+            const call = toolCalls.get(message.toolCallId);
+            const state = call === undefined ? undefined : finishTerminalState(call.arguments);
+            if (state !== undefined) {
+              this.writeBlock(state, terminalTone(state), finishSummary(call!.arguments, state));
+              renderedTerminal = true;
+            }
+          }
+          if (message.toolName === "finish") {
+            lastFinishResult = { index, renderedTerminal };
+          }
+          continue;
+        }
+      }
+    }
+
+    if (task?.terminalState !== undefined) {
+      const finishRepresentsCurrentTask = lastFinishResult !== undefined &&
+        lastFinishResult.index > lastUserIndex &&
+        lastFinishResult.renderedTerminal;
+      if (!finishRepresentsCurrentTask) {
+        this.writeBlock(
+          task.terminalState,
+          terminalTone(task.terminalState),
+          task.message ?? "Task terminated."
+        );
+      }
+    }
   }
 
   public renderInfo(message: string): void {
@@ -142,16 +258,7 @@ export class TerminalRenderer {
         return;
       }
       case "tool_requested": {
-        this.toolNames.set(event.toolCall.id, event.toolCall.name);
-        if (!this.verbose) {
-          return;
-        }
-        const serializedArguments = toolArguments(event.toolCall.arguments);
-        const details = [
-          `call_id: ${truncate(event.toolCall.id, MAX_DISPLAY_LENGTH)}`,
-          ...(serializedArguments === undefined ? [] : [`arguments: ${serializedArguments}`])
-        ];
-        this.writeBlock("tool", "tool", event.toolCall.name, details);
+        this.renderToolRequested(event.toolCall);
         return;
       }
       case "approval_requested":
@@ -230,6 +337,19 @@ export class TerminalRenderer {
       this.assistantTextOpen = true;
     }
     this.output.write(delta);
+  }
+
+  private renderToolRequested(toolCall: ToolCall): void {
+    this.toolNames.set(toolCall.id, toolCall.name);
+    if (!this.verbose) {
+      return;
+    }
+    const serializedArguments = toolArguments(toolCall.arguments);
+    const details = [
+      `call_id: ${truncate(toolCall.id, MAX_DISPLAY_LENGTH)}`,
+      ...(serializedArguments === undefined ? [] : [`arguments: ${serializedArguments}`])
+    ];
+    this.writeBlock("tool", "tool", toolCall.name, details);
   }
 
   private finishAssistantText(): void {

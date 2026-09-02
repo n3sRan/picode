@@ -17,6 +17,8 @@ export interface CliOptions {
   help: boolean;
   verbose: boolean;
   task?: string;
+  /** Empty string means resume the most recently updated session. */
+  resume?: string;
 }
 
 export interface CliWriter {
@@ -43,10 +45,12 @@ export class CliUsageError extends Error {
 }
 
 const USAGE = `Usage: picode [--cwd <path>] [--verbose] [<task>]
+       picode [--cwd <path>] [--verbose] --resume [<id>]
 
 Options:
   --cwd <path>  Use an existing directory as the workspace.
   --verbose     Show detailed tool, usage, and finish output.
+  --resume [id] Resume the latest session, or a session by ID/prefix.
   --help        Show this help.
 
 Interactive commands:
@@ -71,6 +75,7 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
   let help = false;
   let verbose = false;
   let task: string | undefined;
+  let resume: string | undefined;
   let index = 0;
 
   while (index < args.length) {
@@ -88,6 +93,24 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
     if (argument === "--verbose") {
       verbose = true;
       index += 1;
+      continue;
+    }
+
+    if (argument === "--resume") {
+      if (resume !== undefined) {
+        throw new CliUsageError("--resume may be specified only once");
+      }
+      if (task !== undefined) {
+        throw new CliUsageError("--resume cannot be combined with a task");
+      }
+      const identifier = args[index + 1];
+      if (identifier !== undefined && !identifier.startsWith("-")) {
+        resume = identifier;
+        index += 2;
+      } else {
+        resume = "";
+        index += 1;
+      }
       continue;
     }
 
@@ -115,11 +138,20 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
       throw new CliUsageError(`unknown option: ${argument}`);
     }
 
+    if (resume !== undefined) {
+      throw new CliUsageError("--resume cannot be combined with a task");
+    }
     task = task === undefined ? argument : `${task} ${argument}`;
     index += 1;
   }
 
-  return { cwd, help, verbose, ...(task === undefined ? {} : { task }) };
+  return {
+    cwd,
+    help,
+    verbose,
+    ...(task === undefined ? {} : { task }),
+    ...(resume === undefined ? {} : { resume })
+  };
 }
 
 function writeCliError(
@@ -175,6 +207,9 @@ async function runConfiguredCli(
       await app.initialize({ newSession: true });
       const result = await app.runTask(cliOptions.task);
       return exitCodeForTerminalState(result.terminalState);
+    }
+    if (cliOptions.resume !== undefined) {
+      return await app.runInteractive({ resume: cliOptions.resume });
     }
     return await app.runInteractive();
   } catch (error) {
