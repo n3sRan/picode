@@ -8,6 +8,8 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   DEFAULT_MODEL,
   DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_AUTO_COMPACT,
+  DEFAULT_AUTO_COMPACT_THRESHOLD,
   ConfigError,
   loadConfig,
   readAllowedDotenv
@@ -39,7 +41,9 @@ describe("loadConfig", () => {
         "PICODE_MODEL=dotenv-model",
         "PICODE_CONTEXT_WINDOW=64000",
         "PICODE_MAX_OUTPUT_TOKENS=8192",
-        "PICODE_MAX_LLM_REQUESTS=10"
+        "PICODE_MAX_LLM_REQUESTS=10",
+        "PICODE_AUTO_COMPACT=false",
+        "PICODE_AUTO_COMPACT_THRESHOLD=0.6"
       ].join("\n")
     );
 
@@ -51,7 +55,9 @@ describe("loadConfig", () => {
         PICODE_MODEL: "process-model",
         PICODE_CONTEXT_WINDOW: "90000",
         PICODE_MAX_OUTPUT_TOKENS: "900000",
-        PICODE_MAX_LLM_REQUESTS: "20"
+        PICODE_MAX_LLM_REQUESTS: "20",
+        PICODE_AUTO_COMPACT: "true",
+        PICODE_AUTO_COMPACT_THRESHOLD: "0.7"
       }
     });
 
@@ -61,11 +67,13 @@ describe("loadConfig", () => {
       model: "process-model",
       contextWindow: 90000,
       maxOutputTokens: 900000,
-      maxLlmRequests: 20
+      maxLlmRequests: 20,
+      autoCompact: true,
+      autoCompactThreshold: 0.7
     });
   });
 
-  it("reads only the six supported keys and applies defaults", () => {
+  it("reads only the supported keys and applies defaults", () => {
     const startupDir = createTemporaryDirectory();
     const dotenvPath = join(startupDir, ".env");
     writeFileSync(
@@ -93,7 +101,9 @@ describe("loadConfig", () => {
       model: "dotenv-model",
       contextWindow: DEFAULT_CONTEXT_WINDOW,
       maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-      maxLlmRequests: DEFAULT_MAX_LLM_REQUESTS
+      maxLlmRequests: DEFAULT_MAX_LLM_REQUESTS,
+      autoCompact: DEFAULT_AUTO_COMPACT,
+      autoCompactThreshold: DEFAULT_AUTO_COMPACT_THRESHOLD
     });
   });
 
@@ -109,8 +119,37 @@ describe("loadConfig", () => {
       model: DEFAULT_MODEL,
       contextWindow: DEFAULT_CONTEXT_WINDOW,
       maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-      maxLlmRequests: DEFAULT_MAX_LLM_REQUESTS
+      maxLlmRequests: DEFAULT_MAX_LLM_REQUESTS,
+      autoCompact: DEFAULT_AUTO_COMPACT,
+      autoCompactThreshold: DEFAULT_AUTO_COMPACT_THRESHOLD
     });
+  });
+
+  it("parses strict automatic compaction values and rejects invalid values", () => {
+    const startupDir = createTemporaryDirectory();
+    const baseEnv = { PICODE_API_KEY: "process-secret" };
+
+    expect(loadConfig({
+      startupDir,
+      env: {
+        ...baseEnv,
+        PICODE_AUTO_COMPACT: "true",
+        PICODE_AUTO_COMPACT_THRESHOLD: "0.85"
+      }
+    })).toMatchObject({ autoCompact: true, autoCompactThreshold: 0.85 });
+
+    expect(() => loadConfig({
+      startupDir,
+      env: { ...baseEnv, PICODE_AUTO_COMPACT: "yes" }
+    })).toThrowError(new ConfigError("PICODE_AUTO_COMPACT must be true or false"));
+    expect(() => loadConfig({
+      startupDir,
+      env: { ...baseEnv, PICODE_AUTO_COMPACT_THRESHOLD: "0.9" }
+    })).toThrowError(new ConfigError("PICODE_AUTO_COMPACT_THRESHOLD must be greater than 0 and less than 0.9"));
+    expect(() => loadConfig({
+      startupDir,
+      env: { ...baseEnv, PICODE_AUTO_COMPACT_THRESHOLD: "not-a-number" }
+    })).toThrowError(new ConfigError("PICODE_AUTO_COMPACT_THRESHOLD must be greater than 0 and less than 0.9"));
   });
 
   it.each(["PICODE_API_KEY"])("fails before a request when %s is missing", (missingKey) => {

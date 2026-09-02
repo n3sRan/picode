@@ -4,6 +4,7 @@ export type CliCommand =
   | { kind: "new_session"; name?: string }
   | { kind: "list_sessions" }
   | { kind: "resume_session"; identifier: string }
+  | { kind: "compact" }
   | { kind: "exit" };
 
 export class CliCommandError extends Error {
@@ -37,6 +38,11 @@ export function parseCliCommand(line: string): CliCommand {
       }
       return { kind: "resume_session", identifier: parts[1] };
     }
+    case "/compact":
+      if (parts.length !== 1) {
+        throw new CliCommandError("Usage: /compact");
+      }
+      return { kind: "compact" };
     case "/exit":
       if (parts.length !== 1) {
         throw new CliCommandError("Usage: /exit");

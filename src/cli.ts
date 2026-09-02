@@ -51,6 +51,7 @@ Interactive commands:
   /new [name]   Create and switch to a new session.
   /sessions     List sessions for the current workspace.
   /resume <id>  Resume a session by full ID or unambiguous prefix.
+  /compact      Summarize safe historical context for the current session.
   /exit         Exit interactive mode.
 `;
 

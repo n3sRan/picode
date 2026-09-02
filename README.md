@@ -9,6 +9,7 @@
 - OpenAI-compatible Chat Completions、SSE streaming 和原生 tool calling。
 - 严格串行的 Agent Loop，以及唯一的 `finish` 完成协议。
 - `finish` 终态显示当前上下文估算 token 数和窗口占用比例。
+- 交互模式支持显式 `/compact`；自动压缩默认关闭，可按窗口比例阈值开启。
 - 本地 JSON Schema 参数校验、工具错误处理、重复调用检测和任务限制。
 - 工作区路径策略、符号链接边界检查、`.env` 文件保护和输出脱敏。
 - 每条 shell 命令逐次审批；命令以当前用户权限运行。
@@ -58,7 +59,7 @@ picode --help
 
 ## 配置
 
-配置优先级为：进程环境变量 > 启动目录中的 `.env` > 代码默认值。程序只读取以下六个配置项，不会把 `.env` 的其他内容注入子进程环境。
+配置优先级为：进程环境变量 > 启动目录中的 `.env` > 代码默认值。程序只读取以下八个配置项，不会把 `.env` 的其他内容注入子进程环境。
 
 | 变量 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -68,6 +69,8 @@ picode --help
 | `PICODE_CONTEXT_WINDOW` | 否 | `1000000` | 上下文窗口大小 |
 | `PICODE_MAX_OUTPUT_TOKENS` | 否 | `128000` | 单次模型请求的最大输出长度 |
 | `PICODE_MAX_LLM_REQUESTS` | 否 | `30` | 每个任务允许的最大模型请求数 |
+| `PICODE_AUTO_COMPACT` | 否 | `false` | 是否在普通 LLM 请求前自动压缩上下文 |
+| `PICODE_AUTO_COMPACT_THRESHOLD` | 否 | `0.8` | 自动压缩触发比例；必须小于 0.9 |
 
 `.env.example` 中提供了可直接复制的模板。进程环境变量适合 CI 或临时覆盖配置。
 
@@ -88,6 +91,7 @@ picode [--cwd <path>] [<task>]
 | `/new [name]` | 创建并切换到新 session |
 | `/sessions` | 列出当前工作区的 session |
 | `/resume <id>` | 按完整 ID 或无歧义前缀恢复 session |
+| `/compact` | 用一次无工具摘要请求整理安全的历史上下文 |
 | `/exit` | 退出交互模式 |
 
 单任务模式的退出码：

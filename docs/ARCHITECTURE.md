@@ -52,6 +52,7 @@ src/
     repetition.ts
   context/
     budget.ts
+    compactor.ts
   tools/
     types.ts
     registry.ts
@@ -146,7 +147,7 @@ UI消费以下实时事件：
 - `context_compacted`
 - `agent_terminated`
 
-MVP 事件用于模块通信和测试，不单独写 append-only event log；上面新增的上下文事件属于后续扩展设计。
+事件用于模块通信和测试，不单独写 append-only event log；上下文压缩事件只描述摘要状态和压缩结果，不携带完整请求或凭据。
 
 ## 5. OpenAI Chat Adapter
 
@@ -263,7 +264,7 @@ MVP 不支持工作区外文件工具审批。用户若确有需要，只能主�
 
 list/search/read/write/edit 执行器必须拒绝 `.env` 和 `.env.*`，仅 `.env.example` 例外。该限制必须在执行层实现，不能只靠 UI 隐藏。
 
-当前配置模块只提取六个 `PICODE_*` 键，并提供模型、上下文窗口、单次输出长度和任务请求上限的默认值；上下文增强阶段将增加自动压缩开关和阈值两个 allowlisted 键。redactor 在 UI、错误和 session 保存前替换实际 API Key。递归 JSON 脱敏只处理值并保留对象键名，避免破坏工具参数名。
+当前配置模块只提取八个 `PICODE_*` 键，并提供模型、上下文窗口、单次输出长度、任务请求上限、自动压缩开关和阈值的默认值。redactor 在 UI、错误和 session 保存前替换实际 API Key。递归 JSON 脱敏只处理值并保留对象键名，避免破坏工具参数名。
 
 ### 7.3 ApprovalBroker
 
@@ -281,19 +282,18 @@ MVP 只可用少量明显关键词追加“可能访问网络”的提示，不�
 
 ## 8. Context Budget
 
-MVP 不实现自动 compaction，避免引入摘要正确性和恢复语义。
-
 `BudgetTracker` 保存最近一次 `usage.prompt_tokens`。下一请求前仅估算该响应后新增的 user、assistant 和 tool result 内容：
 
 - 估计达到配置窗口 75%：发出 UI warning；
 - 达到 90%：拒绝新请求并进入 `limit_reached`；
 - usage 缺失：对完整当前 context 做一次保守字符估算并警告。
+- 自动压缩默认关闭；开启后在普通请求前达到 `PICODE_AUTO_COMPACT_THRESHOLD` 时交给 `ContextCompactor`，成功后清除 usage anchor 并重新预算。
 
-估算器包含固定消息/tool schema 开销，但不声称是 tokenizer。这个模块以后可以扩展为 usage anchor + automatic compaction，而无需修改 Agent Loop 的主要边界。
+估算器包含固定消息/tool schema 开销，但不声称是 tokenizer。自动压缩失败、无进展或仍未低于触发阈值时，保留原消息并回退到 90% hard stop。
 
 ### 8.1 上下文计量与压缩（阶段性实现）
 
-以下设计中，finish 后上下文计量已实现，ContextCompactor 和自动压缩尚未实现；第 8 节的 75% warning、90% stop 是关闭自动压缩时的兼容基线。
+finish 后上下文计量、ContextCompactor 和自动压缩均已实现；第 8 节的 75% warning、90% stop 是关闭自动压缩时的兼容基线。
 
 `BudgetTracker` 增加当前上下文度量接口，返回：
 
@@ -327,7 +327,7 @@ flowchart TD
 裁剪策略遵守以下不变量：
 
 - 初始 system message 永远保留；
-- current user task 和继续任务所需的最近消息尾部保留；
+- user message 全部保留，当前任务和继续任务所需的最近消息尾部保留；
 - assistant tool call 及其 tool results 以完整消息组为单位处理；
 - 摘要请求成功且新消息列表验证通过后，才替换内存上下文并原子保存；
 - no-op、超时、取消、无进展或保存失败均保留原消息，不生成半压缩快照。
@@ -436,13 +436,13 @@ UI不直接执行工具、修改 model context 或写 session。Agent busy 时�
 
 原子快照足以支持教学项目的多会话与安全恢复。完整 event sourcing 的成本和测试面不适合当前截止时间。
 
-### 上下文保护而非自动压缩
+### 上下文保护与可回退压缩
 
-演示模型具有很长上下文，MVP 先记录 usage 并阻止明显超限。自动摘要的质量和恢复复杂度留给后续增强。
+演示模型具有很长上下文，运行时先记录 usage 并阻止明显超限；自动压缩默认关闭，开启后只整理安全的历史消息组，并在摘要失败时回退到原有 hard stop。
 
 ### 自动压缩默认关闭且显式可控
 
-后续扩展保留当前行为作为默认路径：`PICODE_AUTO_COMPACT=false` 时不自动请求摘要模型，仍使用 75% warning 和 90% stop；用户可以在 idle 状态用 `/compact` 主动整理历史。自动开启后只在普通请求前、达到独立阈值时压缩，并在失败或无进展时回退到原有 hard stop。
+当前实现保留默认关闭时的兼容路径：`PICODE_AUTO_COMPACT=false` 时不自动请求摘要模型，仍使用 75% warning 和 90% stop；用户可以在 idle 状态用 `/compact` 主动整理历史。自动开启后只在普通请求前、达到独立阈值时压缩，并在失败或无进展时回退到原有 hard stop。
 
 ### 摘要作为历史 assistant message
 
@@ -453,8 +453,8 @@ UI不直接执行工具、修改 model context 或写 session。Agent busy 时�
 - compatible 网关可能和官方 SDK存在细节差异，需要真实 smoke test。
 - shell 审批不能阻止用户误批危险命令。
 - 路径检查不对抗恶意本地并发进程造成的全部 TOCTOU 竞态。
-- 字符估算不是 tokenizer，MVP 也不会自动压缩长会话。
-- 自动压缩即使实现，也只能减少可裁剪的历史；当前任务本身、system prompt 或不可拆分的最近 tool 组过大时仍可能触发 hard stop。
+- 字符估算不是 tokenizer；自动压缩也只能减少可裁剪的历史，不能替代精确 token 计量。
+- 当前任务本身、system prompt 或不可拆分的最近 tool 组过大时仍可能触发 hard stop。
 - 摘要模型可能遗漏细节或保留过时结论，压缩不是文件状态的事实来源。
 - 崩溃恢复只识别 pending 副作用，不重建完整事件历史。
 

@@ -7,6 +7,7 @@ import { BudgetTracker } from "../src/context/index.js";
 import type { AssistantMessage, JsonObject, LlmUsage, Message, ToolCall } from "../src/domain/messages.js";
 import type { LlmProvider, LlmRequest, LlmResponse } from "../src/llm/provider.js";
 import { ScriptedLlmProvider } from "../src/llm/provider.js";
+import { LlmProviderError } from "../src/domain/errors.js";
 import { ScriptedApprovalBroker, type ApprovalBroker, type ApprovalRequest } from "../src/security/approval.js";
 import { PathPolicy } from "../src/security/path-policy.js";
 import { createBuiltinToolRegistry } from "../src/tools/index.js";
@@ -82,6 +83,17 @@ function finishResponse(status: "success" | "partial" | "failure" = "success"): 
       remainingIssues: status === "success" ? "" : "known issue"
     })
   ]);
+}
+
+function compactableHistory(payload: string): Message[] {
+  const oldCall = call("old-read", "read_file", { path: "old.txt" });
+  return [
+    { role: "system", content: "Historical system" },
+    { role: "user", content: "Old task" },
+    assistant([oldCall]).message,
+    { role: "tool", toolCallId: oldCall.id, toolName: oldCall.name, content: payload },
+    assistant([], "Latest historical answer").message
+  ];
 }
 
 const valueSchema: JsonSchema = {
@@ -369,6 +381,143 @@ describe("AgentLoop flow and tool batching", () => {
       ratio: expect.any(Number),
       contextWindow: expect.any(Number)
     });
+  });
+
+  it("automatically compacts once before a normal request when the configured threshold is reached", async () => {
+    const provider = new ScriptedLlmProvider([
+      { response: assistant([], "Historical summary") },
+      { response: finishResponse() }
+    ]);
+    const tools = createBuiltinToolRegistry();
+    const budget = new BudgetTracker({ contextWindow: 20_000, charsPerToken: 1 });
+    const result = await new AgentLoop({
+      provider,
+      tools,
+      toolContext: makeContext(),
+      initialMessages: compactableHistory("old result ".repeat(1_500)),
+      budgetTracker: budget,
+      autoCompact: true,
+      autoCompactThreshold: 0.8
+    }).run("Current task");
+
+    const started = result.events.find((event) => event.type === "context_compaction_started");
+    const compacted = result.events.find((event) => event.type === "context_compacted");
+    expect(result.terminalState).toBe("completed");
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[0]?.tools).toBeUndefined();
+    expect(provider.requests[1]?.tools).toHaveLength(tools.list().length);
+    expect(provider.requests[1]?.messages.some(
+      (message) => message.role === "assistant" && message.content.includes("[picode historical context summary]")
+    )).toBe(true);
+    expect(started).toEqual({ type: "context_compaction_started", mode: "automatic" });
+    expect(compacted).toMatchObject({ type: "context_compacted", mode: "automatic" });
+    expect(compacted && compacted.type === "context_compacted" ? compacted.before.ratio : 0).toBeGreaterThanOrEqual(0.8);
+    expect(compacted && compacted.type === "context_compacted" ? compacted.after.ratio : 1).toBeLessThan(0.8);
+    expect(result.limits.llmRequestCount).toBe(2);
+  });
+
+  it("keeps the existing hard-stop behavior when automatic compaction is disabled", async () => {
+    const provider = new ScriptedLlmProvider([{ response: finishResponse() }]);
+    const result = await new AgentLoop({
+      provider,
+      tools: new ToolRegistry([finishTool]),
+      toolContext: makeContext(),
+      initialMessages: [{ role: "user", content: "x".repeat(5_000) }],
+      budgetTracker: new BudgetTracker({ contextWindow: 1_000, charsPerToken: 1 }),
+      autoCompact: false,
+      autoCompactThreshold: 0.8
+    }).run("Current task");
+
+    expect(result.terminalState).toBe("limit_reached");
+    expect(provider.requests).toHaveLength(0);
+    expect(result.events.some((event) => event.type === "context_compaction_started")).toBe(false);
+  });
+
+  it("falls back to the existing stop rule after an automatic compaction failure", async () => {
+    const provider = new ScriptedLlmProvider([{
+      error: new LlmProviderError("network", "summary request failed", { retryable: false })
+    }]);
+    const result = await new AgentLoop({
+      provider,
+      tools: new ToolRegistry([finishTool]),
+      toolContext: makeContext(),
+      initialMessages: compactableHistory("old result ".repeat(1_200)),
+      budgetTracker: new BudgetTracker({ contextWindow: 10_000, charsPerToken: 1 }),
+      autoCompact: true,
+      autoCompactThreshold: 0.8
+    }).run("Current task");
+
+    expect(result.terminalState).toBe("limit_reached");
+    expect(provider.requests).toHaveLength(1);
+    expect(result.limits.llmRequestCount).toBe(1);
+    expect(result.events.some(
+      (event) => event.type === "context_warning" && event.message.includes("compaction failed")
+    )).toBe(true);
+  });
+
+  it("does not spend a summary request when automatic compaction has no safe candidate", async () => {
+    const provider = new ScriptedLlmProvider([{ response: finishResponse() }]);
+    const result = await new AgentLoop({
+      provider,
+      tools: new ToolRegistry([finishTool]),
+      toolContext: makeContext(),
+      initialMessages: [{ role: "user", content: "x".repeat(5_000) }],
+      budgetTracker: new BudgetTracker({ contextWindow: 1_000, charsPerToken: 1 }),
+      autoCompact: true,
+      autoCompactThreshold: 0.8
+    }).run("Current task");
+
+    expect(result.terminalState).toBe("limit_reached");
+    expect(provider.requests).toHaveLength(0);
+    expect(result.limits.llmRequestCount).toBe(0);
+    expect(result.events.filter((event) => event.type === "context_compaction_started")).toHaveLength(0);
+  });
+
+  it("counts automatic compaction against the task request limit", async () => {
+    const provider = new ScriptedLlmProvider([
+      { response: assistant([], "Historical summary") },
+      { response: finishResponse() }
+    ]);
+    const result = await new AgentLoop({
+      provider,
+      tools: new ToolRegistry([finishTool]),
+      toolContext: makeContext(),
+      initialMessages: compactableHistory("old result ".repeat(1_500)),
+      budgetTracker: new BudgetTracker({ contextWindow: 20_000, charsPerToken: 1 }),
+      limits: { maxLlmRequests: 1 },
+      autoCompact: true,
+      autoCompactThreshold: 0.8
+    }).run("Current task");
+
+    expect(result.terminalState).toBe("limit_reached");
+    expect(provider.requests).toHaveLength(1);
+    expect(result.limits.llmRequestCount).toBe(1);
+    expect(result.messages.at(-1)?.role).not.toBe("tool");
+  });
+
+  it("aborts an in-flight automatic compaction without sending the normal request", async () => {
+    const provider = new ScriptedLlmProvider([
+      { response: assistant([], "Historical summary"), delayMs: 100 },
+      { response: finishResponse() }
+    ]);
+    const controller = new AbortController();
+    const loop = new AgentLoop({
+      provider,
+      tools: new ToolRegistry([finishTool]),
+      toolContext: makeContext(),
+      initialMessages: compactableHistory("old result ".repeat(1_500)),
+      budgetTracker: new BudgetTracker({ contextWindow: 20_000, charsPerToken: 1 }),
+      autoCompact: true,
+      autoCompactThreshold: 0.8
+    });
+    const running = loop.run("Current task", controller.signal);
+    setTimeout(() => controller.abort(), 10);
+
+    const result = await running;
+
+    expect(result.terminalState).toBe("aborted");
+    expect(provider.requests).toHaveLength(1);
+    expect(result.events.some((event) => event.type === "context_compacted")).toBe(false);
   });
 });
 

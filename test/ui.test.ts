@@ -55,6 +55,18 @@ class RecordingSessionStore extends SessionStore {
   }
 }
 
+class FailNextSaveSessionStore extends SessionStore {
+  public failNextSave = false;
+
+  public override save(snapshot: SessionSnapshot): void {
+    if (this.failNextSave) {
+      this.failNextSave = false;
+      throw new Error("session disk write failed");
+    }
+    super.save(snapshot);
+  }
+}
+
 function finishResponse(): LlmResponse {
   const call: ToolCall = {
     id: "finish-1",
@@ -111,6 +123,8 @@ function createConfig(overrides: Partial<PicodeConfig> = {}): PicodeConfig {
     contextWindow: 128_000,
     maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
     maxLlmRequests: 30,
+    autoCompact: false,
+    autoCompactThreshold: 0.8,
     ...overrides
   };
 }
@@ -159,8 +173,10 @@ describe("slash commands and terminal task lifecycle", () => {
       kind: "resume_session",
       identifier: "abc123"
     });
+    expect(parseCliCommand("/compact")).toEqual({ kind: "compact" });
     expect(parseCliCommand("/exit")).toEqual({ kind: "exit" });
     expect(() => parseCliCommand("/resume")).toThrowError(CliCommandError);
+    expect(() => parseCliCommand("/compact now")).toThrowError(CliCommandError);
     expect(() => parseCliCommand("/unknown")).toThrowError(CliCommandError);
   });
 
@@ -337,6 +353,7 @@ describe("slash commands and terminal task lifecycle", () => {
     expect(app.isBusy()).toBe(true);
     await expect(app.runTask("second task")).rejects.toBeInstanceOf(TerminalBusyError);
     await app.handleLine("/new should-not-switch");
+    await app.handleLine("/compact");
     expect(app.getSession()!.id).toBe(firstId);
     expect(errorOutput.text).toContain("busy");
     await running;
@@ -344,6 +361,147 @@ describe("slash commands and terminal task lifecycle", () => {
 
     await app.handleLine("/exit");
     expect(output.text).toContain("Goodbye.");
+  });
+
+  it("compacts the current session through /compact and clears the old usage anchor", async () => {
+    const workspace = temporaryDirectory("picode-ui-compact-workspace-");
+    const root = temporaryDirectory("picode-ui-compact-root-");
+    const provider = new ScriptedLlmProvider([{ response: textResponse("Historical summary") }]);
+    const { app, store, output, errorOutput } = createApp(workspace, root, provider);
+    const session = store.create("compact session");
+    const oldCall: ToolCall = {
+      id: "old-read",
+      name: "read_file",
+      rawArguments: JSON.stringify({ path: "old.txt" }),
+      arguments: { path: "old.txt" }
+    };
+    store.save({
+      ...session,
+      messages: [
+        { role: "system", content: "You are picode." },
+        { role: "user", content: "Old task" },
+        { role: "assistant", content: "", toolCalls: [oldCall], finishReason: "tool_calls" },
+        { role: "tool", toolCallId: oldCall.id, toolName: oldCall.name, content: "old result" },
+        { role: "user", content: "Current task" },
+        { role: "assistant", content: "Latest answer", toolCalls: [], finishReason: "stop" }
+      ],
+      usage: { promptTokens: 100 },
+      task: { state: "completed", terminalState: "completed", reason: "finish_success" }
+    });
+
+    await app.initialize();
+    await app.handleLine("/compact");
+
+    const saved = store.load(session.id);
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.tools).toBeUndefined();
+    expect(saved.usage).toBeUndefined();
+    expect(saved.task).toEqual({ state: "idle" });
+    expect(saved.messages.some((message) => message.role === "assistant" && message.content.includes("[picode historical context summary]"))).toBe(true);
+    expect(saved.messages.some((message) => message.role === "tool" && message.toolCallId === oldCall.id)).toBe(false);
+    expect(saved.messages).toContainEqual({ role: "user", content: "Current task" });
+    expect(output.text).toContain("[compact] explicit context compaction started");
+    expect(output.text).toContain("[compact] explicit context compacted");
+    expect(output.text).toContain("before:");
+    expect(output.text).toContain("after:");
+    expect(output.text).toContain("removed_groups: 1");
+    expect(errorOutput.text).toBe("");
+    expect(app.isBusy()).toBe(false);
+  });
+
+  it("keeps the original session when saving a compacted snapshot fails", async () => {
+    const workspace = temporaryDirectory("picode-ui-compact-save-workspace-");
+    const root = temporaryDirectory("picode-ui-compact-save-root-");
+    const store = new FailNextSaveSessionStore({
+      workspaceRoot: workspace,
+      rootDir: root,
+      redactionSecrets: ["ui-test-secret"]
+    });
+    const session = store.create("failed compact save");
+    const oldCall: ToolCall = {
+      id: "old-read",
+      name: "read_file",
+      rawArguments: JSON.stringify({ path: "old.txt" }),
+      arguments: { path: "old.txt" }
+    };
+    const originalMessages: SessionSnapshot["messages"] = [
+      { role: "system", content: "You are picode." },
+      { role: "user", content: "Old task" },
+      { role: "assistant", content: "", toolCalls: [oldCall], finishReason: "tool_calls" },
+      { role: "tool", toolCallId: oldCall.id, toolName: oldCall.name, content: "old result" },
+      { role: "user", content: "Current task" },
+      { role: "assistant", content: "Latest answer", toolCalls: [], finishReason: "stop" }
+    ];
+    store.save({
+      ...session,
+      messages: originalMessages,
+      task: { state: "completed", terminalState: "completed", reason: "finish_success" }
+    });
+    store.failNextSave = true;
+    const output = new CaptureWritable();
+    const errorOutput = new CaptureWritable();
+    const app = new TerminalApp({
+      workspaceRoot: workspace,
+      config: createConfig(),
+      provider: new ScriptedLlmProvider([{ response: textResponse("Historical summary") }]),
+      sessionStore: store,
+      input: new PassThrough(),
+      output,
+      errorOutput,
+      isInteractive: false
+    });
+
+    await app.initialize();
+    await app.handleLine("/compact");
+
+    const saved = store.load(session.id);
+    expect(saved.messages).toEqual(originalMessages);
+    expect(saved.task).toMatchObject({ state: "completed", reason: "finish_success" });
+    expect(output.text).not.toContain("context compacted");
+    expect(errorOutput.text).toContain("session disk write failed");
+    expect(app.isBusy()).toBe(false);
+  });
+
+  it("passes automatic compaction settings through TerminalApp and persists the compacted task", async () => {
+    const workspace = temporaryDirectory("picode-ui-auto-compact-workspace-");
+    const root = temporaryDirectory("picode-ui-auto-compact-root-");
+    const provider = new ScriptedLlmProvider([
+      { response: textResponse("Historical summary") },
+      { response: finishResponse() }
+    ]);
+    const { app, store } = createApp(workspace, root, provider, new CaptureWritable(), new CaptureWritable(), new PassThrough(), false, {
+      contextWindow: 5_000,
+      autoCompact: true,
+      autoCompactThreshold: 0.8
+    });
+    const session = store.create("automatic compaction");
+    const oldCall: ToolCall = {
+      id: "old-read",
+      name: "read_file",
+      rawArguments: JSON.stringify({ path: "old.txt" }),
+      arguments: { path: "old.txt" }
+    };
+    store.save({
+      ...session,
+      messages: [
+        { role: "system", content: "You are picode." },
+        { role: "user", content: "Old task" },
+        { role: "assistant", content: "", toolCalls: [oldCall], finishReason: "tool_calls" },
+        { role: "tool", toolCallId: oldCall.id, toolName: oldCall.name, content: "old result ".repeat(1_500) },
+        { role: "assistant", content: "Latest answer", toolCalls: [], finishReason: "stop" }
+      ],
+      task: { state: "completed", terminalState: "completed", reason: "finish_success" }
+    });
+
+    await app.initialize();
+    const result = await app.runTask("Current task");
+
+    const saved = store.load(session.id);
+    expect(result.terminalState).toBe("completed");
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[0]?.tools).toBeUndefined();
+    expect(saved.messages.some((message) => message.role === "assistant" && message.content.includes("Historical summary"))).toBe(true);
+    expect(saved.messages.at(-1)).toMatchObject({ role: "tool", toolCallId: "finish-1" });
   });
 
   it("runs a single task through the main CLI composition and returns the finish exit code", async () => {

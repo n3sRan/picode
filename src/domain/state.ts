@@ -1,6 +1,7 @@
 export type RuntimeState =
   | "idle"
   | "preparing_context"
+  | "compacting_context"
   | "streaming"
   | "validating_tools"
   | "awaiting_approval"

@@ -39,10 +39,14 @@ function indent(value: string): string {
     .join("\n");
 }
 
-function formatContextUsage(usage: ContextUsage): string {
+function formatContextUsageValue(usage: ContextUsage): string {
   const percent = `${(usage.ratio * 100).toFixed(2).replace(/\.?0+$/, "")}%`;
   const source = usage.source === "fallback_estimate" ? "fallback estimate" : "usage anchor";
-  return `context: ${usage.estimatedTokens.toLocaleString("en-US")} tokens (${percent} of ${usage.contextWindow.toLocaleString("en-US")}; ${source})`;
+  return `${usage.estimatedTokens.toLocaleString("en-US")} tokens (${percent} of ${usage.contextWindow.toLocaleString("en-US")}; ${source})`;
+}
+
+function formatContextUsage(usage: ContextUsage): string {
+  return `context: ${formatContextUsageValue(usage)}`;
 }
 
 function toolArguments(value: Record<string, unknown>): string | undefined {
@@ -168,6 +172,17 @@ export class TerminalRenderer {
         return;
       case "context_usage":
         this.pendingContextUsage = event.usage;
+        return;
+      case "context_compaction_started":
+        this.writeBlock("compact", "info", `${event.mode} context compaction started`);
+        return;
+      case "context_compacted":
+        this.writeBlock("compact", "success", `${event.mode} context compacted`, [
+          `before: ${formatContextUsageValue(event.before)}`,
+          `after: ${formatContextUsageValue(event.after)}`,
+          `removed_messages: ${event.removedMessageCount}`,
+          `removed_groups: ${event.removedGroupCount}`
+        ]);
         return;
       case "agent_terminated":
         {

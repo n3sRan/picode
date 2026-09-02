@@ -6,7 +6,7 @@
 - 产品名称与 CLI 命令：`picode`
 - 开发仓库：当前 Git 仓库根目录
 - 目标平台：macOS/Linux，Node.js 22+
-- 上下文增强状态：第 1 点（`finish` 后上下文计量）已实现；上下文压缩尚未实现
+- 上下文增强状态：`finish` 后上下文计量、显式 `/compact` 和可配置自动压缩均已实现
 
 本文定义截止日前必须完成的 MVP。最终两分钟演示题目和主要卖点在实现稳定后决定。
 
@@ -36,6 +36,7 @@
 - 显式 `finish` 成功协议。
 - 会话新建、列出、恢复和原子快照。
 - `usage.prompt_tokens` 记录及简单上下文上限保护。
+- `finish` 终态上下文计量、显式 `/compact` 和默认关闭的自动上下文压缩。
 - 确定性测试和隔离目录中的真实 API E2E。
 
 ### 3.2 当前不做
@@ -49,7 +50,7 @@
 - 高级 glob/regex 搜索。
 - 细粒度命令语法和风险分析。
 - append-only 审计日志、复杂崩溃事件重放。
-- 自动上下文压缩和完整 token 校准系统。
+- 完整 token 校准系统。
 - 容器或操作系统级沙箱、Windows 支持。
 
 ### 3.3 可选增强
@@ -61,8 +62,6 @@
 3. 搜索 glob/regex；
 4. 更细的命令风险分类；
 5. append-only event log 和精细崩溃重放；
-6. `finish` 后上下文计量已实现；自动 compaction 本轮已进入后续设计，见第 14 节。
-
 可选增强不得改变 MVP 的公开运行方式或延误测试和演示。
 
 ## 4. CLI
@@ -81,6 +80,7 @@
 - `/new [name]`
 - `/sessions`
 - `/resume <id>`
+- `/compact`
 - `/exit`
 
 只有 Agent 空闲或当前任务已终止时才能切换会话。会话 ID 使用 UUID，CLI 可接受无歧义短前缀。
@@ -134,8 +134,10 @@
 | `PICODE_CONTEXT_WINDOW` | 否 | `1000000` | 正整数；按实际模型配置 |
 | `PICODE_MAX_OUTPUT_TOKENS` | 否 | `128000` | 单次模型请求的最大输出长度 |
 | `PICODE_MAX_LLM_REQUESTS` | 否 | `30` | 每个任务允许的最大模型请求数 |
+| `PICODE_AUTO_COMPACT` | 否 | `false` | 是否在普通 LLM 请求前自动压缩上下文 |
+| `PICODE_AUTO_COMPACT_THRESHOLD` | 否 | `0.8` | 自动压缩触发比例；必须大于 0 且小于 0.9 |
 
-优先级为 `进程环境变量 > 启动目录中的 .env > 代码默认值`。当前实现只解析这六个键，不把 `.env` 的其他内容注入环境；上下文增强阶段将扩展为八个键，见第 14.3 节。单次请求最大输出和任务请求上限分别由 `PICODE_MAX_OUTPUT_TOKENS` 与 `PICODE_MAX_LLM_REQUESTS` 控制，单次请求超时 120 秒。
+优先级为 `进程环境变量 > 启动目录中的 .env > 代码默认值`。当前实现只解析这八个键，不把 `.env` 的其他内容注入环境。`PICODE_AUTO_COMPACT` 只接受 `true` 或 `false`；自动压缩阈值不能晚于现有 90% stop 阈值。单次请求最大输出和任务请求上限分别由 `PICODE_MAX_OUTPUT_TOKENS` 与 `PICODE_MAX_LLM_REQUESTS` 控制，单次请求超时 120 秒。
 
 ## 6. Agent Loop
 
@@ -145,6 +147,7 @@
 
 - `idle`
 - `preparing_context`
+- `compacting_context`
 - `streaming`
 - `validating_tools`
 - `awaiting_approval`
@@ -261,15 +264,16 @@
 
 ## 9. 上下文保护
 
-MVP 不自动压缩上下文，只实现简单预算保护：
+上下文预算默认不自动压缩，只实现简单预算保护；开启 `PICODE_AUTO_COMPACT` 后，普通请求前会先尝试一次安全摘要：
 
 1. 每个请求启用 `include_usage` 并记录最近一次 `usage.prompt_tokens`。
 2. 下一请求前，对该响应之后新增的 assistant/tool/user 内容做保守字符估算。
 3. `最近 prompt_tokens + 新增估算` 达到 context window 的 75% 时显示警告。
 4. 达到 90% 时不再发送请求，进入 `limit_reached`，提示用户创建新会话。
 5. usage 缺失时对当前完整 context 做保守估算，并显示一次降级警告。
+6. 自动压缩关闭时保持上述 75% warning / 90% stop 行为；开启时在独立阈值（默认 80%）达到后调用不带工具的摘要请求，失败、无进展或仍未降到阈值以下时回退到原有 stop 规则。
 
-该机制只防止明显超限，不宣称等价于模型 tokenizer。当前实现仍不自动 compaction；自动压缩和更完整的 usage 锚点管理已转入第 14 节的后续设计。
+该机制只防止明显超限，不宣称等价于模型 tokenizer。自动摘要请求计入当前任务的 LLM 请求上限，成功压缩后旧 usage anchor 失效。
 
 ## 10. 基本会话持久化
 
@@ -340,7 +344,7 @@ MVP 不自动压缩上下文，只实现简单预算保护：
 
 ## 14. 上下文可观测性与压缩（阶段性设计）
 
-本节记录本轮新增目标及其阶段状态。第 14.1 节已实现；第 14.2–14.4 节仍是待实现设计。自动压缩实现前，第 9 节描述的 MVP 预算保护仍然有效。
+本节记录本轮新增目标及其阶段状态。第 14.1–14.3 节已实现；第 14.4 节记录当前可观察性与验收要求。自动压缩关闭时，第 9 节描述的 MVP 预算保护仍然有效。
 
 ### 14.1 `finish` 后的上下文计量
 
@@ -356,7 +360,7 @@ MVP 不自动压缩上下文，只实现简单预算保护：
 终端 renderer 将度量放在 `[completed]`、`[partial]` 或 `[failed]` 的末尾，至少展示：
 
 ```text
-context: 12,345 tokens (1.23% of 1,000,000; estimated)
+context: 12,345 tokens (1.23% of 1,000,000; usage anchor)
 ```
 
 这里的 token 数是“当前上下文估算值”，不是一次新的 LLM 请求，也不增加请求次数。若最近一次请求有 `prompt_tokens`，继续使用现有 usage anchor 加新增消息的保守估算；若 usage 缺失，则对完整上下文估算，并明确标注 fallback。计算范围与下一次请求一致，包含消息和工具 schema，但不包含尚未发送的模型输出。
@@ -365,14 +369,14 @@ context: 12,345 tokens (1.23% of 1,000,000; estimated)
 
 ### 14.2 显式 `/compact`
 
-状态：待实现。
+状态：已实现。
 
 交互模式新增 `/compact` 命令。它只在 Agent 空闲或上一任务已经终止时执行；任务运行中输入时沿用 busy 拒绝行为。该命令不创建新的 user task，不调用 `finish`，也不依赖自动压缩开关，因此自动压缩关闭时仍然可用。
 
 压缩流程：
 
 1. 读取当前 session 的消息，计算压缩前 token 估算和比例；
-2. 选择可安全移除的最旧消息前缀，只在完整逻辑消息组的边界裁剪；
+2. 选择可安全移除的历史 assistant-only 或 assistant+完整 tool result 消息组，只在完整逻辑消息组的边界裁剪；
 3. 将被裁剪部分交给一次不带工具定义的专用摘要请求，摘要请求不执行本地工具，也不要求 `finish`；
 4. 校验摘要为普通文本后，把它包装成带明确标记的运行时生成历史摘要消息（`role=assistant`、`toolCalls=[]`、`finishReason=stop`），再与保留的消息尾部拼接；
 5. 重新计算压缩后占用，原子保存 session，并展示压缩前后 token 数、比例和移除范围。
@@ -380,7 +384,7 @@ context: 12,345 tokens (1.23% of 1,000,000; estimated)
 安全边界：
 
 - 初始 system message 不得删除；
-- 不得删除当前任务仍需依赖的 user message；
+- 不得删除 user message；当前任务和历史任务的用户输入都保留在原消息序列中；
 - assistant tool call 与其全部 tool result 必须作为一个完整组保留或一起裁剪，不能制造孤立的 tool message；
 - 摘要只代表历史事实，必须使用明确的历史摘要标记，模型仍需对当前工作区重新验证；
 - 摘要请求或保存失败时，内存和 session 都保留原上下文，不产生半压缩状态；
@@ -390,7 +394,7 @@ context: 12,345 tokens (1.23% of 1,000,000; estimated)
 
 ### 14.3 自动压缩配置与触发规则
 
-状态：待实现。
+状态：已实现。
 
 新增两个配置项。它们遵循现有的环境变量优先级，且加入 allowlist；未知 `.env` 键仍然不会进入配置或子进程环境。
 
@@ -404,7 +408,7 @@ context: 12,345 tokens (1.23% of 1,000,000; estimated)
 - `PICODE_AUTO_COMPACT=false`：完全沿用当前行为，达到 75% 显示 warning，达到 90% 拒绝请求并进入 `limit_reached`；不自动调用摘要模型；
 - `PICODE_AUTO_COMPACT=true` 且估算比例低于阈值：正常发送请求；
 - 估算比例达到阈值：先进入 `compacting_context`，按 14.2 的安全流程压缩，再重新检查预算；自动压缩只有在新估算低于触发阈值后才算成功并发送普通请求；
-- 自动压缩请求本身受 120 秒超时、取消信号、活跃时间和 LLM 请求上限约束，并计入当前任务的 LLM 请求次数；若没有可用请求额度，直接使用现有限制流程；
+- 自动压缩请求本身受 120 秒超时、取消信号、活跃时间和 LLM 请求上限约束，并计入当前任务的 LLM 请求次数；若没有可用请求额度，直接使用现有限制流程；显式 `/compact` 不占用任务请求额度；
 - 摘要无效、压缩无进展或压缩后仍未低于触发阈值时，不得无限重试。保留原上下文并回退到现有 90% stop 规则；超过 stop 阈值则进入 `limit_reached`，低于 stop 阈值才允许继续；
 - 同一份未变化的消息历史不得反复自动压缩。需要记录压缩是否实际减少了上下文，避免无进展时形成循环。
 
@@ -414,11 +418,11 @@ context: 12,345 tokens (1.23% of 1,000,000; estimated)
 
 第 14.1 节已增加并使用以下可观察数据：
 
-- `context_usage`：估算 token 数、窗口比例、窗口大小、估算来源（usage anchor 或 fallback）以及阶段（completion 或 post-compaction）；
+- `context_usage`：估算 token 数、窗口比例、窗口大小和估算来源（usage anchor 或 fallback）；
 
-上下文压缩实现后再增加：
+上下文压缩实现后已增加：
 
-- `context_compacted`：模式（explicit 或 automatic）、压缩前后 token 数、比例、摘要消息和裁剪消息组数量；
+- `context_compacted`：模式（explicit 或 automatic）、压缩前后 token 数、比例和裁剪消息/消息组数量；摘要消息本身随 session 消息保存；
 - `compacting_context` 状态：用于区分摘要请求与普通模型请求，避免把摘要文本当作 assistant 任务回答展示。
 
 压缩后的消息必须和普通消息一起进入原子 session 快照。恢复时只加载已经成功保存的旧版或新版快照，不自动重放摘要请求；若进程在摘要请求期间退出，原上下文仍是安全版本。摘要和度量在 UI、错误和 session 保存前同样执行 API Key 脱敏。
@@ -427,7 +431,7 @@ context: 12,345 tokens (1.23% of 1,000,000; estimated)
 
 - `finish` 的 accepted result 先落入消息，随后终态末尾出现 token 数和百分比，且不增加 LLM 请求；
 - usage anchor、fallback、工具 schema 和 finish result 都被纳入当前度量；
-- `/compact` 的解析、空闲可用、busy 拒绝、无可压缩内容、摘要失败和取消；
+- `/compact` 的解析、空闲可用、busy 拒绝、无可压缩内容、摘要失败、保存失败和取消；
 - 压缩边界不产生孤立 tool call/result，system message 和当前任务保留；
 - 自动开关和阈值解析、优先级、非法值、默认关闭，以及关闭时 75%/90% 回归行为；
 - 自动压缩成功、无进展、请求额度不足、超时和上下文仍超限时的有限重试与回退；

@@ -165,6 +165,7 @@ function isAgentState(value: unknown): value is AgentState {
   return [
     "idle",
     "preparing_context",
+    "compacting_context",
     "streaming",
     "validating_tools",
     "awaiting_approval",

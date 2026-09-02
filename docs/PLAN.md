@@ -3,7 +3,7 @@
 ## 1. 状态与原则
 
 - 当前状态：Phase 0-5 已完成，Phase 6 进行中（限制与文件搜索边界、基础结构清理、LLM 运行参数配置、取消/超时处理、批次调用关联、macOS 大小写路径保护和恢复/限制回归测试已完成，下一批待定）。
-- Phase 7 已开始：批次 H（`finish` 后上下文计量）已完成，下一步实现显式 `/compact`，最后接入默认关闭的自动压缩。
+- Phase 7 已开始：批次 H（`finish` 后上下文计量）、I（显式 `/compact`）和 J（默认关闭的自动压缩）已完成，下一步进行全量回归与隔离演示复核。
 - 优先完成可解释、可测试的 MVP，不以生产级完整性为目标。
 - 每个阶段都必须保持可构建、可测试。
 - 可选增强只能在全部 MVP 验收通过后开始。
@@ -40,7 +40,7 @@
 测试批次 A：
 
 - 环境变量高于启动目录 `.env`。
-- 只读取六个 `PICODE_*` 键，并支持模型、上下文窗口、单次输出长度和任务请求上限的默认值与覆盖。
+- 只读取八个 `PICODE_*` 键，并支持模型、上下文窗口、单次输出长度、任务请求上限、自动压缩开关和阈值的默认值与覆盖。
 - 缺少 API Key/model 时在请求前失败。
 - API Key 不出现在错误和输出中。
 - 非法 `--cwd` 明确失败。
@@ -200,7 +200,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 
 ## 10. Phase 7：上下文可观测性与压缩
 
-状态：进行中（批次 H 已完成；SPEC、ARCHITECTURE 和本计划已同步，批次 I/J/K 待执行）。
+状态：进行中（批次 H、I、J 已完成；SPEC、ARCHITECTURE 和本计划已同步，批次 K 待执行）。
 
 目标是在不破坏现有 `finish`、请求上限、session 恢复和工具安全边界的前提下，增加可解释的上下文度量和可回退的压缩能力。实现顺序固定为“度量 → 显式压缩 → 自动压缩 → 回归和演示”，每一步都先保持 build、typecheck 和确定性测试可通过。
 
@@ -220,20 +220,20 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 - 已扩展 BudgetTracker 的当前上下文计算接口和 `AgentRunResult`/事件数据；
 - 已在 finish tool result 写入后计算度量，并让 renderer 将其作为终态末尾详情；
 - 已覆盖 usage anchor、fallback、tool schema、finish result、终态顺序和“不得增加请求”的行为；
-- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`，82 个测试通过。
+- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`；批次 H 当时 82 个测试通过，当前全量回归为 97 个测试通过。
 
-批次 I：ContextCompactor 与显式 `/compact`。
+批次 I：ContextCompactor 与显式 `/compact`（已完成）。
 
 - 实现摘要请求适配、摘要文本校验、脱敏和安全消息边界；
 - 扩展 CLI command、TerminalApp 路由和 compact 结果展示；
-- 覆盖空闲成功、busy 拒绝、无可压缩内容、摘要失败、取消、保存失败和 session 恢复；
+- 覆盖空闲成功、busy 拒绝、无可压缩内容、摘要失败、取消、脱敏、保存失败和 session 快照读取；
 - 重点断言旧消息不会产生孤立 tool result，system/current task 不会误删，失败不会污染原 session。
 
-批次 J：自动压缩和配置。
+批次 J：自动压缩和配置（已完成）。
 
 - 扩展配置 allowlist、`.env`/进程环境优先级、布尔值和比例校验，并补齐 `.env.example`、README 和帮助文本；
 - 在 `preparing_context` 接入阈值判断、`compacting_context` 状态、重新预算和 hard-stop 回退；
-- 覆盖默认关闭回归、80% 默认阈值、自定义阈值、请求额度不足、超时、取消、无进展和压缩后仍超限；
+- 覆盖默认关闭回归、80% 默认阈值、自定义阈值、请求额度不足、取消、无进展和压缩失败后的回退；120 秒超时沿用统一 LLM provider 超时测试；
 - 重点断言自动摘要不会在工具执行中触发，不会跳过 90% stop，也不会形成重复压缩循环。
 
 批次 K：端到端和视频候选复核。
@@ -250,7 +250,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 - `/compact` 在自动关闭时仍可用，成功/失败/取消均有明确输出且不破坏消息配对；
 - `PICODE_AUTO_COMPACT=false` 与原 75%/90% 预算行为一致；开启后在阈值处有限压缩、失败回退，不绕过任务限制；
 - 压缩后的 session 能原子恢复，摘要和输出不会泄露 API Key；
-- 隔离 demo 可以从打包后的 bin 展示读、改、验证、压缩、恢复和 `finish`，且开发仓库无演示产物。
+- 隔离 demo 可以从打包后的 bin 展示读、改、验证、压缩、恢复和 `finish`，且开发仓库无演示产物（批次 K 待复核）。
 
 ## 11. 可选增强门
 

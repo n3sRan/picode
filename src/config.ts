@@ -6,6 +6,8 @@ export const DEFAULT_MODEL = "gpt-5.6";
 export const DEFAULT_CONTEXT_WINDOW = 1_000_000;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 128_000;
 export const DEFAULT_MAX_LLM_REQUESTS = 30;
+export const DEFAULT_AUTO_COMPACT = false;
+export const DEFAULT_AUTO_COMPACT_THRESHOLD = 0.8;
 
 export const CONFIG_KEYS = [
   "PICODE_API_KEY",
@@ -13,7 +15,9 @@ export const CONFIG_KEYS = [
   "PICODE_MODEL",
   "PICODE_CONTEXT_WINDOW",
   "PICODE_MAX_OUTPUT_TOKENS",
-  "PICODE_MAX_LLM_REQUESTS"
+  "PICODE_MAX_LLM_REQUESTS",
+  "PICODE_AUTO_COMPACT",
+  "PICODE_AUTO_COMPACT_THRESHOLD"
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -25,6 +29,8 @@ export interface PicodeConfig {
   contextWindow: number;
   maxOutputTokens: number;
   maxLlmRequests: number;
+  autoCompact: boolean;
+  autoCompactThreshold: number;
 }
 
 export interface LoadConfigOptions {
@@ -77,7 +83,7 @@ function parseDotenvValue(value: string): string {
 }
 
 /**
- * Reads only the six supported keys. Unknown dotenv entries are discarded
+ * Reads only the supported keys. Unknown dotenv entries are discarded
  * and are never copied into process.env or returned to callers.
  */
 export function readAllowedDotenv(dotenvPath: string): SupportedConfigValues {
@@ -181,6 +187,44 @@ function parsePositiveInteger(
   return parsed;
 }
 
+function parseBoolean(
+  values: SupportedConfigValues,
+  key: ConfigKey,
+  fallback: boolean
+): boolean {
+  const rawValue = values[key];
+  if (rawValue === undefined) {
+    return fallback;
+  }
+
+  switch (rawValue.trim()) {
+    case "true":
+      return true;
+    case "false":
+      return false;
+    default:
+      throw new ConfigError(`${key} must be true or false`);
+  }
+}
+
+function parseRatio(
+  values: SupportedConfigValues,
+  key: ConfigKey,
+  fallback: number,
+  upperBound: number
+): number {
+  const rawValue = values[key];
+  if (rawValue === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(rawValue.trim());
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed >= upperBound) {
+    throw new ConfigError(`${key} must be greater than 0 and less than ${upperBound}`);
+  }
+  return parsed;
+}
+
 function parseModel(values: SupportedConfigValues): string {
   return values.PICODE_MODEL === undefined
     ? DEFAULT_MODEL
@@ -208,6 +252,13 @@ export function loadConfig(options: LoadConfigOptions = {}): PicodeConfig {
       values,
       "PICODE_MAX_LLM_REQUESTS",
       DEFAULT_MAX_LLM_REQUESTS
+    ),
+    autoCompact: parseBoolean(values, "PICODE_AUTO_COMPACT", DEFAULT_AUTO_COMPACT),
+    autoCompactThreshold: parseRatio(
+      values,
+      "PICODE_AUTO_COMPACT_THRESHOLD",
+      DEFAULT_AUTO_COMPACT_THRESHOLD,
+      0.9
     )
   };
 }

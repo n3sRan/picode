@@ -3,6 +3,7 @@ import type { Readable, Writable } from "node:stream";
 import type { AgentRunResult, ToolExecutionCheckpoint } from "../agent/index.js";
 import { AgentLoop } from "../agent/index.js";
 import type { PicodeConfig } from "../config.js";
+import { BudgetTracker, ContextCompactor } from "../context/index.js";
 import { PathPolicy } from "../security/path-policy.js";
 import { CliApprovalBroker } from "../security/approval.js";
 import { createBuiltinToolRegistry } from "../tools/index.js";
@@ -152,6 +153,8 @@ export class TerminalApp {
           maxLlmRequests: this.config.maxLlmRequests
         },
         contextWindow: this.config.contextWindow,
+        autoCompact: this.config.autoCompact,
+        autoCompactThreshold: this.config.autoCompactThreshold,
         onEvent: (event) => this.renderer.render(event),
         beforeToolExecution: (call, checkpoint) => this.savePendingTool(call, checkpoint),
         afterToolExecution: (call, result, checkpoint) =>
@@ -222,6 +225,9 @@ export class TerminalApp {
           this.recoverCurrentSession();
           this.renderer.renderInfo("Resumed session " + this.shortSessionId() + ".");
           return;
+        case "compact":
+          await this.compactCurrentSession();
+          return;
         case "exit":
           this.exiting = true;
           this.renderer.renderInfo("Goodbye.");
@@ -234,6 +240,54 @@ export class TerminalApp {
 
   public abortCurrentTask(): void {
     this.activeAbort?.abort();
+  }
+
+  private async compactCurrentSession(): Promise<void> {
+    const session = await this.initialize();
+    this.busy = true;
+    this.renderer.beginTask();
+    const controller = new AbortController();
+    this.activeAbort = controller;
+    const onProcessInterrupt = () => controller.abort();
+    if (this.isInteractive) {
+      process.once("SIGINT", onProcessInterrupt);
+    }
+
+    try {
+      const toolDefinitions = createBuiltinToolRegistry().toLlmDefinitions();
+      const budget = new BudgetTracker({ contextWindow: this.config.contextWindow });
+      const before = budget.measureCurrent(session.messages, toolDefinitions);
+      this.renderer.render({ type: "context_compaction_started", mode: "explicit" });
+      const compactor = new ContextCompactor({
+        provider: this.provider,
+        redactionSecrets: [this.config.apiKey]
+      });
+      const result = await compactor.compact(session.messages, controller.signal);
+      if (!result.changed) {
+        this.renderer.renderInfo(result.reason ?? "Context was not compacted.");
+        return;
+      }
+
+      const after = budget.measureCurrent(result.messages, toolDefinitions);
+      this.saveSession({
+        messages: [...result.messages],
+        task: { state: "idle" }
+      });
+      this.renderer.render({
+        type: "context_compacted",
+        mode: "explicit",
+        before,
+        after,
+        removedMessageCount: result.removedMessageCount,
+        removedGroupCount: result.removedGroupCount
+      });
+    } finally {
+      if (this.isInteractive) {
+        process.removeListener("SIGINT", onProcessInterrupt);
+      }
+      this.activeAbort = undefined;
+      this.busy = false;
+    }
   }
 
   private savePendingTool(call: ToolCall, checkpoint: ToolExecutionCheckpoint): void {

@@ -1,6 +1,6 @@
 import type { AgentEvent } from "../domain/events.js";
 import type { ContextUsage } from "../domain/context.js";
-import { DEFAULT_CONTEXT_WINDOW } from "../config.js";
+import { DEFAULT_AUTO_COMPACT_THRESHOLD, DEFAULT_CONTEXT_WINDOW } from "../config.js";
 import type {
   AssistantMessage,
   JsonObject,
@@ -16,7 +16,13 @@ import { LlmProviderError, normalizeLlmProviderError } from "../domain/errors.js
 import type { LlmProvider } from "../llm/provider.js";
 import type { ApprovalBroker, ApprovalRequest } from "../security/approval.js";
 import { redactSecrets, redactValue } from "../security/redact.js";
-import { BudgetTracker, type ContextBudgetDecision } from "../context/budget.js";
+import {
+  BudgetTracker,
+  ContextCompactor,
+  type ContextBudgetDecision,
+  type ContextCompactionOptions,
+  type ContextCompactionResult
+} from "../context/index.js";
 import {
   ActiveTimeTracker,
   DEFAULT_MAX_ACTIVE_MS,
@@ -57,6 +63,9 @@ export interface AgentLoopOptions {
   maxConsecutiveRepeatedToolCalls?: number;
   contextWindow?: number;
   budgetTracker?: BudgetTracker;
+  autoCompact?: boolean;
+  autoCompactThreshold?: number;
+  contextCompactor?: ContextCompactor;
   clock?: MonotonicClock;
   onEvent?: AgentEventListener;
   beforeToolExecution?: (call: ToolCall, checkpoint: ToolExecutionCheckpoint) => void | Promise<void>;
@@ -185,6 +194,9 @@ export class AgentLoop {
   private readonly onEvent: AgentEventListener | undefined;
   private readonly clock: MonotonicClock;
   private readonly budget: BudgetTracker;
+  private readonly autoCompact: boolean;
+  private readonly autoCompactThreshold: number;
+  private readonly contextCompactor: ContextCompactor;
   private readonly beforeToolExecution: AgentLoopOptions["beforeToolExecution"];
   private readonly afterToolExecution: AgentLoopOptions["afterToolExecution"];
   private state: AgentState = "idle";
@@ -196,6 +208,9 @@ export class AgentLoop {
   private repetition = new RepetitionTracker();
   private finishArgs: ResolvedFinishArgs | undefined;
   private lastUsage: LlmUsage | undefined;
+  private automaticCompactionSignature: string | undefined;
+  private currentTaskMessageIndex = -1;
+  private currentTaskHasAssistantResponse = false;
   private executionContext: ToolExecutionContext;
 
   public constructor(options: AgentLoopOptions) {
@@ -209,6 +224,19 @@ export class AgentLoop {
     this.onEvent = options.onEvent;
     this.clock = options.clock ?? systemMonotonicClock;
     this.budget = options.budgetTracker ?? new BudgetTracker({ contextWindow: options.contextWindow ?? DEFAULT_CONTEXT_WINDOW });
+    this.autoCompact = options.autoCompact ?? false;
+    this.autoCompactThreshold = options.autoCompactThreshold ?? DEFAULT_AUTO_COMPACT_THRESHOLD;
+    if (
+      !Number.isFinite(this.autoCompactThreshold) ||
+      this.autoCompactThreshold <= 0 ||
+      this.autoCompactThreshold >= this.budget.stopRatio
+    ) {
+      throw new Error(`autoCompactThreshold must be greater than 0 and less than ${this.budget.stopRatio}`);
+    }
+    this.contextCompactor = options.contextCompactor ?? new ContextCompactor({
+      provider: options.provider,
+      redactionSecrets: options.toolContext.redactionSecrets ?? []
+    });
     this.beforeToolExecution = options.beforeToolExecution;
     this.afterToolExecution = options.afterToolExecution;
     this.activeTime = new ActiveTimeTracker(this.clock);
@@ -232,6 +260,9 @@ export class AgentLoop {
     this.events = [];
     this.finishArgs = undefined;
     this.lastUsage = undefined;
+    this.automaticCompactionSignature = undefined;
+    this.currentTaskMessageIndex = -1;
+    this.currentTaskHasAssistantResponse = false;
     this.budget.reset();
     this.limits = new TaskLimitTracker(this.limitOptions);
     this.activeTime = new ActiveTimeTracker(this.clock);
@@ -242,6 +273,7 @@ export class AgentLoop {
     }
     const userMessage: UserMessage = { role: "user", content: userTask };
     this.messages.push(userMessage);
+    this.currentTaskMessageIndex = this.messages.length - 1;
     this.executionContext = {
       ...this.baseToolContext,
       approvalBroker: new LoopApprovalBroker(
@@ -277,6 +309,23 @@ export class AgentLoop {
 
       const budgetDecision = this.budget.beforeRequest(this.messages, toolDefinitions);
       this.emitBudgetWarning(budgetDecision);
+      if (this.autoCompact && budgetDecision.ratio >= this.autoCompactThreshold) {
+        const compacted = await this.tryAutomaticCompaction(toolDefinitions, signal);
+        if (compacted) {
+          continue;
+        }
+        if (signal.aborted) {
+          return this.terminate("aborted", "aborted", "The task was aborted before the next LLM request.");
+        }
+        const postCompactionLimitViolation = this.limits.checkBeforeRequest(this.activeTime.elapsedMs());
+        if (postCompactionLimitViolation !== undefined) {
+          return this.terminate(
+            "limit_reached",
+            "limit_reached",
+            this.formatLimitViolation(postCompactionLimitViolation)
+          );
+        }
+      }
       if (!budgetDecision.allowed) {
         return this.terminate(
           "limit_reached",
@@ -315,6 +364,7 @@ export class AgentLoop {
         this.baseToolContext.redactionSecrets ?? []
       );
       this.messages.push(safeAssistant);
+      this.currentTaskHasAssistantResponse = true;
       this.emit({
         type: "assistant_message_completed",
         message: safeAssistant
@@ -389,6 +439,100 @@ export class AgentLoop {
         return outcome;
       }
     }
+  }
+
+  private async tryAutomaticCompaction(
+    toolDefinitions: ReturnType<ToolRegistry["toLlmDefinitions"]>,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    const signature = JSON.stringify(this.messages);
+    if (this.automaticCompactionSignature === signature) {
+      return false;
+    }
+    this.automaticCompactionSignature = signature;
+
+    const before = this.budget.measureCurrent(this.messages, toolDefinitions);
+    const compactionOptions = this.automaticCompactionOptions();
+    if (!this.contextCompactor.canCompact(this.messages, compactionOptions)) {
+      this.emit({
+        type: "context_warning",
+        message: "Automatic context compaction made no progress; keeping the existing context.",
+        ratio: before.ratio
+      });
+      return false;
+    }
+
+    const limitViolation = this.limits.checkBeforeRequest(this.activeTime.elapsedMs());
+    if (limitViolation !== undefined) {
+      return false;
+    }
+    this.setState("compacting_context");
+    this.emit({ type: "context_compaction_started", mode: "automatic" });
+    this.limits.recordLlmRequest();
+
+    let result: ContextCompactionResult;
+    try {
+      result = await this.contextCompactor.compact(this.messages, signal, compactionOptions);
+    } catch (error) {
+      if (!signal.aborted) {
+        this.emit({
+          type: "context_warning",
+          message: this.redact(
+            "Automatic context compaction failed; keeping the existing context. " + safeErrorMessage(error)
+          ),
+          ratio: before.ratio
+        });
+      }
+      return false;
+    }
+
+    if (!result.changed) {
+      this.emit({
+        type: "context_warning",
+        message: this.redact(result.reason ?? "Automatic context compaction made no progress; keeping the existing context."),
+        ratio: before.ratio
+      });
+      return false;
+    }
+
+    const after = this.budget.measureFallback(result.messages, toolDefinitions);
+    if (after.ratio >= this.autoCompactThreshold) {
+      this.emit({
+        type: "context_warning",
+        message: "Automatic context compaction did not reduce usage below its threshold; keeping the existing context.",
+        ratio: before.ratio
+      });
+      return false;
+    }
+
+    const currentTaskMessage = this.messages[this.currentTaskMessageIndex];
+    this.messages = [...result.messages];
+    if (currentTaskMessage !== undefined) {
+      const updatedTaskIndex = this.messages.indexOf(currentTaskMessage);
+      if (updatedTaskIndex >= 0) {
+        this.currentTaskMessageIndex = updatedTaskIndex;
+      }
+    }
+    this.budget.reset();
+    this.lastUsage = undefined;
+    this.emit({
+      type: "context_compacted",
+      mode: "automatic",
+      before,
+      after,
+      removedMessageCount: result.removedMessageCount,
+      removedGroupCount: result.removedGroupCount
+    });
+    return true;
+  }
+
+  private automaticCompactionOptions(): ContextCompactionOptions {
+    return {
+      preserveLatestUnit: this.currentTaskHasAssistantResponse,
+      ...(this.currentTaskMessageIndex < 0
+        ? {}
+        : { summaryUserCutoffIndex: this.currentTaskMessageIndex })
+    };
   }
 
   private validateBatch(calls: readonly ToolCall[]): BatchValidation {

@@ -8,7 +8,7 @@
 
 ## 设计来源
 
-本项目参考了 [pi-from-scratch](https://github.com/SaladDay/pi-from-scratch) 对 Coding Agent 核心数据流的拆解，但所有核心模块均根据本项目规格重新设计和实现。主要扩展包括工具参数验证、路径策略、命令审批、显式终止协议、会话恢复和上下文预算。
+本项目参考了 [pi-from-scratch](https://github.com/SaladDay/pi-from-scratch) 对 Coding Agent 核心数据流的拆解，但所有核心模块均根据本项目规格重新设计和实现。主要扩展包括工具参数验证、路径策略、命令审批、显式终止协议、会话恢复、上下文计量和可回退的上下文压缩。
 
 ## 当前 MVP 范围
 
@@ -21,7 +21,8 @@
 - 严格串行工具执行。
 - 工作区路径边界与逐命令审批。
 - 基本多会话：新建、列出、恢复。
-- 原子会话快照、usage 记录和上下文上限保护。
+- 原子会话快照、usage 记录、上下文计量和上下文上限保护。
+- 显式 `/compact` 压缩，以及默认关闭、可配置阈值的自动压缩。
 - 确定性测试与一个显式运行的真实 API E2E。
 
 ## 当前 MVP 明确不做
@@ -34,7 +35,7 @@
 - 高级 glob/regex 搜索。
 - 精细化 shell 命令风险解析。
 - append-only 审计事件日志和复杂事件重放。
-- 自动上下文压缩与完整混合 token 校准。
+- 完整混合 token 校准。
 
 这些能力只可在 MVP 全部验收且时间允许时作为可选增强，不得阻塞核心交付。
 
@@ -63,10 +64,12 @@
 - `PICODE_CONTEXT_WINDOW`
 - `PICODE_MAX_OUTPUT_TOKENS`
 - `PICODE_MAX_LLM_REQUESTS`
+- `PICODE_AUTO_COMPACT`
+- `PICODE_AUTO_COMPACT_THRESHOLD`
 
-优先级为 `进程环境变量 > 启动目录中的 .env > 代码默认值`。只读取这六个键，不把 `.env` 全量注入环境。`PICODE_MODEL` 缺省为 `gpt-5.6`，`PICODE_CONTEXT_WINDOW` 缺省为 `1000000`，`PICODE_MAX_OUTPUT_TOKENS` 缺省为 `128000`，`PICODE_MAX_LLM_REQUESTS` 缺省为 `30`。仓库提交 `.env.example`，并忽略 `.env` 和会话数据。
+优先级为 `进程环境变量 > 启动目录中的 .env > 代码默认值`。只读取这八个键，不把 `.env` 全量注入环境。`PICODE_MODEL` 缺省为 `gpt-5.6`，`PICODE_CONTEXT_WINDOW` 缺省为 `1000000`，`PICODE_MAX_OUTPUT_TOKENS` 缺省为 `128000`，`PICODE_MAX_LLM_REQUESTS` 缺省为 `30`，`PICODE_AUTO_COMPACT` 缺省为 `false`，`PICODE_AUTO_COMPACT_THRESHOLD` 缺省为 `0.8`。仓库提交 `.env.example`，并忽略 `.env` 和会话数据。
 
-每个主请求启用 `stream_options.include_usage` 并记录 `usage.prompt_tokens`。MVP 不自动 compaction：下一次请求前仅用最近一次 prompt usage 加新增消息的保守估算做上限保护；usage 缺失时降级为完整上下文估算并显示警告。
+每个主请求启用 `stream_options.include_usage` 并记录 `usage.prompt_tokens`。自动压缩默认关闭；关闭时下一次请求前仅用最近一次 prompt usage 加新增消息的保守估算做上限保护，usage 缺失时降级为完整上下文估算并显示警告。开启自动压缩后，只在普通请求前达到独立阈值时调用无工具摘要请求，失败或无进展时回退到原有 hard stop。
 
 ## 会话约束
 

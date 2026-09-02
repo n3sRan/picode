@@ -121,16 +121,25 @@ export class BudgetTracker {
   ): ContextUsage {
     const currentCharacters = estimateMessageCharacters(messages) + estimateToolCharacters(tools);
     const anchoredPromptTokens = this.lastPromptTokens;
-    const usedFallbackEstimate = anchoredPromptTokens === undefined;
-    const estimatedTokens = usedFallbackEstimate
-      ? Math.ceil(currentCharacters / this.charsPerToken)
-      : anchoredPromptTokens + Math.ceil(Math.max(0, currentCharacters - this.anchorCharacters) / this.charsPerToken);
+    if (anchoredPromptTokens === undefined) {
+      return this.measureFallbackEstimate(currentCharacters);
+    }
+    const estimatedTokens = anchoredPromptTokens + Math.ceil(
+      Math.max(0, currentCharacters - this.anchorCharacters) / this.charsPerToken
+    );
     return {
       estimatedTokens,
       ratio: estimatedTokens / this.contextWindow,
       contextWindow: this.contextWindow,
-      source: usedFallbackEstimate ? "fallback_estimate" : "usage_anchor"
+      source: "usage_anchor"
     };
+  }
+
+  public measureFallback(
+    messages: readonly Message[],
+    tools: readonly LlmToolDefinition[] = []
+  ): ContextUsage {
+    return this.measureFallbackEstimate(estimateMessageCharacters(messages) + estimateToolCharacters(tools));
   }
 
   public getLastPromptTokens(): number | undefined {
@@ -139,5 +148,15 @@ export class BudgetTracker {
 
   public isUsageMissing(): boolean {
     return this.usageMissing;
+  }
+
+  private measureFallbackEstimate(currentCharacters: number): ContextUsage {
+    const estimatedTokens = Math.ceil(currentCharacters / this.charsPerToken);
+    return {
+      estimatedTokens,
+      ratio: estimatedTokens / this.contextWindow,
+      contextWindow: this.contextWindow,
+      source: "fallback_estimate"
+    };
   }
 }
