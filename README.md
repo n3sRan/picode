@@ -78,12 +78,15 @@ picode --help
 
 ```text
 picode [--cwd <path>] [--verbose] [<task>]
+picode [--cwd <path>] [--verbose] --resume [<id>]
 ```
 
-- `picode`：进入交互模式；存在最近 session 时恢复，否则创建新 session。
+- `picode`：进入交互模式并创建一个新的 session。
 - `picode "<task>"`：创建新 session，执行单个任务并以终态退出码结束。
 - `--cwd <path>`：指定一个已存在的工作区目录。
 - `--verbose`：启动时开启当前进程的完整工具、usage 和 finish 输出。
+- `picode --resume`：恢复当前工作区最近更新的 session，并进入交互模式。
+- `picode --resume <id>`：按完整 ID 或无歧义前缀恢复指定 session，并进入交互模式。
 
 交互模式支持：
 
@@ -91,13 +94,15 @@ picode [--cwd <path>] [--verbose] [<task>]
 | --- | --- |
 | `/new [name]` | 创建并切换到新 session |
 | `/sessions` | 列出当前工作区的 session |
-| `/resume <id>` | 按完整 ID 或无歧义前缀恢复 session |
+| `/resume <id>` | 按完整 ID 或无歧义前缀恢复 session，并输出一次历史 |
 | `/compact` | 用一次无工具摘要请求整理安全的历史上下文 |
 | `/verbose` | 开启当前进程的详细终端输出 |
 | `/verbose off` | 关闭当前进程的详细终端输出 |
 | `/exit` | 退出交互模式 |
 
 终端输出详细度默认关闭。启动时使用 `--verbose` 或交互中输入 `/verbose` 开启完整输出，使用 `/verbose off` 关闭。关闭时普通工具只在完成后显示工具名和执行状态的一行，finish 只显示最终状态；每轮 `[usage]` 隐藏，但 finish 后的独立 `[context]` 信息始终显示。该开关只在当前进程内生效，不写入 session。
+
+会话启动与历史回放契约已确认，当前待实现：`--resume` 不能和任务文本同时使用；没有可恢复 session 时直接报错退出。恢复时只回放快照中的 user、assistant 和 tool 消息，system 消息不显示，历史工具不会重新执行，也不补造旧的每轮 `[usage]` 或 `[context]`。
 
 单任务模式的退出码：
 

@@ -7,6 +7,7 @@
 - 开发仓库：当前 Git 仓库根目录
 - 目标平台：macOS/Linux，Node.js 22+
 - 上下文增强状态：`finish` 后上下文计量、显式 `/compact`、可配置自动压缩和终端 verbose 控制均已实现
+- 会话启动与历史回放状态：需求已确认，待实现
 
 本文定义截止日前必须完成的 MVP。最终两分钟演示题目和主要卖点在实现稳定后决定。
 
@@ -74,15 +75,30 @@
 - verbose 关闭时，finish 工具自身的 tool 与 tool result 不显示，只显示最终终态；verbose 开启时保持现有 finish 输出。
 - finish 终态后的上下文计量改为独立的 `[context]` 行，位于终态状态行之后，且两种 verbose 模式都显示。
 
+### 3.5 会话启动与历史回放（已确认，待实现）
+
+该批需求只改变 session 的选择和展示入口，不改变 Agent Loop、消息协议、工具执行安全边界或 session 快照格式：
+
+- `picode` 启动时默认创建一个新的 session；带任务文本的 `picode "<task>"` 继续在新 session 中执行。
+- `picode --resume` 恢复当前 workspace 最近更新的 session；`picode --resume <id>` 按完整 ID 或无歧义前缀恢复指定 session。
+- `--resume` 仅用于恢复并进入交互模式，不允许和任务文本组合；当前 workspace 没有可恢复 session 时直接报错退出。
+- 交互 `/resume <id>` 恢复指定 session，并在恢复后将历史消息展示一次；`/resume` 仍要求 ID 或无歧义前缀。
+- 历史回放只展示快照中可重建的 user、assistant 和 tool 消息，隐藏 system 消息；不执行任何历史工具。
+- 历史中的 assistant 文本、普通工具和 finish 按当前 verbose/非 verbose 规则展示；不补造旧的每轮 `[usage]` 或 `[context]`，因为 session 不保存逐轮 event log。
+
 ## 4. CLI
 
 ### 4.1 启动
 
-- `picode`：进入交互模式；有最近会话则恢复，否则新建。
+- `picode`：进入交互模式并创建一个新的 session。
 - `picode "<task>"`：创建新会话并执行一个任务，完成后退出。
 - `picode --cwd <path>`：以指定的现有目录为工作区。
 - `picode --cwd <path> "<task>"`：在指定目录执行单任务。
 - `picode --verbose`：启动时开启当前进程的完整终端输出。
+- `picode --resume`：恢复当前 workspace 最近更新的 session，并进入交互模式。
+- `picode --resume <id>`：恢复指定 session，并进入交互模式。
+
+`--resume` 不能和任务文本同时使用；没有可恢复 session 时返回 CLI 错误，不自动创建新 session。
 
 工作区启动时转换为 canonical path。若标准输入不是 TTY，需要审批的工具默认拒绝，不能隐式批准。
 
@@ -90,7 +106,7 @@
 
 - `/new [name]`
 - `/sessions`
-- `/resume <id>`
+- `/resume <id>`：恢复指定 session，并输出一次可重建的历史消息。
 - `/compact`
 - `/verbose`
 - `/verbose off`
@@ -305,6 +321,12 @@
 写入采用同目录临时文件加 rename，避免半写 JSON。MVP 不实现独立 event log。
 
 执行可能产生副作用的工具前写入 pending 标记，得到结果后清除并更新快照。若启动时发现 pending 标记，显示“上次工具结果未知”，不自动重放；用户可以恢复会话并要求 Agent先检查现状，或创建新会话。MVP 不从事件流精确重建崩溃现场。
+
+### 10.1 启动选择与历史回放
+
+默认启动创建新会话；只有显式 `--resume` 或交互 `/resume <id>` 才加载已有会话。`--resume` 无 ID 时选择最近更新的 session，有 ID 时选择指定 session；没有可恢复 session 时直接报错。`--resume` 不能和任务文本组合。
+
+恢复成功后，UI 只回放一次快照中的 user、assistant 和 tool 消息，不显示 system 消息，不执行任何历史工具。assistant 非空文本继续使用 `[assistant]` 区块；tool、finish 和错误状态遵循当前 verbose 规则：详细模式保留工具调用/结果细节，非详细模式将普通工具压缩为一行并隐藏 finish 的中间行。由于快照不保存逐轮 event log，历史回放不补造旧的 `[usage]` 或 `[context]`。交互 `/resume <id>` 与 CLI `--resume` 共用该回放规则。
 
 ## 11. 错误与可观察性
 

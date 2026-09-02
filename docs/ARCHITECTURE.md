@@ -370,7 +370,7 @@ Session Store 和文件/artifact 写入共用 `fs-utils.ts` 的同目录临时�
 
 ### 9.3 基本恢复
 
-启动时加载最近会话或由用户 `/resume` 指定会话。损坏 JSON 明确报错，不静默丢弃消息。
+默认启动创建新会话；只有显式 `--resume` 或交互 `/resume <id>` 才加载已有会话。`--resume` 无 ID 时选择最近更新的 session，有 ID 时选择指定 session；没有可恢复 session 时直接报错。`--resume` 不能和任务文本组合。损坏 JSON 明确报错，不静默丢弃消息。
 
 若发现 pending tool：
 
@@ -394,6 +394,7 @@ MVP 不通过事件日志精确重建 tool-call/result，不承诺从任意写�
 - Ctrl+C 转换为 AbortSignal；
 - session、usage warning 和终态展示；
 - 维护当前进程的 verbose 状态，并根据该状态选择终端展示粒度。
+- 根据显式恢复请求选择 session，并在恢复后一次性回放可重建的历史消息。
 
 `TerminalRenderer` 不改变 Agent 状态或执行工具。assistant 流式文本以独立区块输出；工具调用、工具结果、审批、usage、warning 和终态使用不同标签、间距和语义颜色。颜色只在 TTY 中启用，非 TTY 输出不包含 ANSI 控制序列，便于日志和管道消费。工具参数和结果摘要在展示层截断，避免单条输出占满终端。
 
@@ -411,6 +412,8 @@ renderer 的两种模式遵循以下规则：
 - finish 终态后的 context usage 单独作为 `[context]` 行输出，位于状态行之后，不受 verbose 开关影响。
 
 该设计只改变 UI 渲染，不改变工具执行、事件记录、消息历史和 API 请求。
+
+历史回放只读取 session 快照中的 user、assistant 和 tool 消息，隐藏 system 消息且不执行历史工具。assistant 非空文本和工具信息沿用当前 verbose/非 verbose renderer 规则；快照没有逐轮 event log，因此不伪造旧的 `[usage]` 或 `[context]`。
 
 ## 11. 测试边界
 

@@ -5,6 +5,7 @@
 - 当前状态：Phase 0-5 已完成，Phase 6 进行中（限制与文件搜索边界、基础结构清理、LLM 运行参数配置、取消/超时处理、批次调用关联、macOS 大小写路径保护和恢复/限制回归测试已完成，下一批待定）。
 - Phase 7 已开始：批次 H（`finish` 后上下文计量）、I（显式 `/compact`）和 J（默认关闭的自动压缩）已完成，下一步进行全量回归与隔离演示复核。
 - Phase 8 已实现：终端 verbose 控制与 finish/context 输出重构已完成，待打包视频流程复核。
+- Phase 9 已确认需求：启动 session 选择与历史回放，尚未开始实现。
 - 优先完成可解释、可测试的 MVP，不以生产级完整性为目标。
 - 每个阶段都必须保持可构建、可测试。
 - 可选增强只能在全部 MVP 验收通过后开始。
@@ -22,6 +23,7 @@
 | M6 | 文档、演示与提交检查 | 行为与文档一致，演示方案和提交物就绪 |
 | M7 | 上下文可观测性与压缩 | `finish` 终态显示当前上下文（已完成）；`/compact` 可安全整理 session；可选自动压缩在阈值前触发且关闭时行为不变 |
 | M8 | 终端详细度与 finish 展示 | `--verbose`、`/verbose`、`/verbose off` 可切换进程级展示；普通工具可折叠；finish 中间输出按模式隐藏；独立 `[context]` 始终显示（代码与确定性测试已完成） |
+| M9 | 启动 session 选择与历史回放 | 默认启动新 session；`--resume[ <id>]` 显式恢复；`/resume <id>` 和 CLI 恢复后按 verbose 规则回放一次历史；无 session 时恢复请求报错 |
 
 若进度落后，优先削减 UI 装饰和便利功能，不削减 Loop、参数校验、路径边界、命令审批、终止限制、基本持久化和确定性测试。
 
@@ -222,7 +224,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 - 已扩展 BudgetTracker 的当前上下文计算接口和 `AgentRunResult`/事件数据；
 - 已在 finish tool result 写入后计算度量，并让 renderer 将其作为终态后的独立 `[context]` 信息；
 - 已覆盖 usage anchor、fallback、tool schema、finish result、终态顺序和“不得增加请求”的行为；
-- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`；批次 H 当时 82 个测试通过，当前全量回归为 100 个测试通过。
+- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`；批次 H 当时 82 个测试通过，当前全量回归为 101 个测试通过。
 
 批次 I：ContextCompactor 与显式 `/compact`（已完成）。
 
@@ -293,7 +295,46 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 - `[context]` 独立输出在终态之后可观察（已验证成功终态；部分/失败 finish 复用同一 renderer 分支，待视频流程复核）。
 - build、typecheck、全量确定性测试已通过；仓库外打包 bin 的 verbose 开启/关闭流程待复核。
 
-## 12. 可选增强门
+## 12. Phase 9：启动 session 选择与历史回放
+
+状态：已确认，待实现。
+
+目标是让 session 的选择语义与主流 coding agent 一致：普通启动从新 session 开始，只有显式恢复请求才加载旧 session；恢复成功后让用户看到一次已有对话历史，同时不引入事件溯源或重新执行副作用。
+
+### 12.1 设计冻结项
+
+1. `picode` 无参数时始终创建新 session；`picode "<task>"` 始终创建新 session 并执行任务。
+2. `picode --resume` 恢复最近更新的 session；`picode --resume <id>` 恢复指定 session。`--resume` 不允许和任务文本组合。
+3. 当前 workspace 没有可恢复 session 时，`--resume` 报错退出，不自动创建新 session。
+4. `/resume <id>` 恢复指定 session，并输出一次历史；`/resume` 仍要求 ID 或无歧义前缀。
+5. 历史回放只展示快照中的 user、assistant 和 tool 消息，隐藏 system，不执行历史工具；tool、finish 和 assistant 文本沿用 verbose/非 verbose 规则。
+6. 历史回放不补造旧的每轮 `[usage]` 或 `[context]`，因为 session 只保存最近 usage 和最终 task 状态，不保存逐轮 event log。
+
+### 12.2 实现批次
+
+- 扩展 CLI 参数解析、帮助文本和启动组合校验，增加 `--resume [<id>]`，明确与任务文本互斥。
+- 将 `TerminalApp` 的默认初始化从“自动加载 latest”改为“默认新建”；为显式 resume 传入最近或指定 session。
+- 在 `/resume` 和 CLI resume 路径中复用同一套历史回放逻辑；恢复 pending tool 时先保持“不重放副作用”的既有安全边界。
+- 在 renderer 增加 session message/history 渲染入口：过滤 system，跳过空 assistant 文本，工具按 verbose 状态输出；不伪造 usage/context event。
+- 同步 README、SPEC、ARCHITECTURE、AGENTS 和帮助文本，明确恢复请求无 session 时的错误行为。
+
+### 12.3 验收与测试
+
+- 普通 `picode` 在已有 session 时仍创建新 session；带 task 的单任务模式不受影响。
+- `--resume` 恢复最近 session，`--resume <id>` 恢复指定 session；不存在、歧义、跨 workspace 和无 session 均有明确错误。
+- `--resume` 与任务文本组合被拒绝；恢复后进入交互而不自动发起 LLM 请求。
+- `/resume <id>` 恢复并只回放一次历史；system 不输出，历史工具不执行，空 assistant 不产生空 `[assistant]`。
+- verbose 开启时历史工具保留细节；关闭时普通工具一行、finish 中间行隐藏，assistant 文本保持；不补造旧 usage/context。
+- `/new`、普通新启动和恢复不会破坏当前进程 verbose 状态、session 原子快照或 pending tool 安全恢复。
+
+### 12.4 Phase 9 出口
+
+- 默认启动、显式恢复和交互恢复的 session 选择语义与文档一致。
+- 恢复历史只展示一次、无历史工具重放或副作用，输出遵循 verbose 规则。
+- 无 session、无效/歧义 ID 和非法参数组合均能在 LLM 请求前失败。
+- build、typecheck、全量确定性测试通过，并在仓库外打包 bin 中手动复核新建、恢复和历史展示流程。
+
+## 13. 可选增强门
 
 只有以下条件全部满足后才评估增强：
 
@@ -313,7 +354,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 
 不要为了实现增强改变已验证的核心路径。
 
-## 13. 测试解释要求
+## 14. 测试解释要求
 
 每新增一批测试文件后，向用户说明：
 
@@ -324,6 +365,6 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 5. 运行命令和结果；
 6. 尚未覆盖的风险。
 
-## 13. 用户确认门（已通过）
+## 15. 用户确认门（已通过）
 
 用户确认前，不创建 `src/` 实现、不安装依赖、不创建 demo、不运行真实 API。当前已完成用户确认，可从 Phase 0 开始。

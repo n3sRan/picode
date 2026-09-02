@@ -48,6 +48,14 @@
 - finish 在 verbose 关闭时隐藏自身的 tool/tool result，只保留最终状态；verbose 开启时保持完整输出。
 - finish 终态后的上下文计量以独立的 `[context]` 信息输出，位于状态行之后，且无论 verbose 是否开启都显示。
 
+## 会话启动与历史回放（已确认，尚未实现）
+
+- `picode` 启动时默认创建新 session；`picode "任务"` 也在新 session 中执行任务。
+- `picode --resume` 恢复当前 workspace 最近更新的 session；`picode --resume <id>` 恢复指定 session。`--resume` 不与任务文本组合使用；没有可恢复 session 时直接报错退出。
+- 交互命令 `/resume <id>` 恢复指定 session，并将历史消息输出一次；`/resume` 仍要求提供 ID 或无歧义前缀。
+- 历史回放只展示快照中可重建的 user、assistant 和 tool 消息，隐藏 system 消息；tool、finish 和 assistant 文本遵循当前 verbose/非 verbose 展示规则。
+- 历史回放不补造旧的每轮 `[usage]` 或 `[context]` 信息，也不执行历史工具；session 不增加 event log。
+
 ## 不可破坏的设计约束
 
 1. Agent Loop 必须由本项目显式实现，状态、错误和终止原因必须可观察、可测试。
