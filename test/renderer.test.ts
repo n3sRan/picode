@@ -165,6 +165,25 @@ describe("TerminalRenderer", () => {
     );
   });
 
+  it("does not open an assistant block for an empty text delta", () => {
+    const output = new CaptureWritable();
+    const renderer = new TerminalRenderer({ output, errorOutput: new CaptureWritable(), color: false });
+    const emptyAssistantMessage = {
+      role: "assistant",
+      content: "",
+      toolCalls: [],
+      finishReason: "stop"
+    } as const;
+
+    renderer.render({ type: "assistant_text_delta", delta: "visible response" });
+    renderer.render({ type: "assistant_message_completed", message: emptyAssistantMessage });
+    renderer.render({ type: "assistant_text_delta", delta: "" });
+    renderer.render({ type: "assistant_message_completed", message: emptyAssistantMessage });
+
+    expect(output.text).toBe("[assistant]\nvisible response\n");
+    expect(output.text.match(/\[assistant\]/g)).toHaveLength(1);
+  });
+
   it("uses ANSI colors only when explicitly enabled", () => {
     const coloredOutput = new CaptureWritable();
     const coloredRenderer = new TerminalRenderer({

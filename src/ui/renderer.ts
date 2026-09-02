@@ -220,6 +220,9 @@ export class TerminalRenderer {
   }
 
   private renderAssistantText(delta: string): void {
+    if (delta.length === 0) {
+      return;
+    }
     if (!this.assistantTextOpen) {
       this.writeSeparator();
       this.output.write(`${this.paint("[assistant]", "assistant")}\n`);
