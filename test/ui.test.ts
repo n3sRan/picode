@@ -137,7 +137,8 @@ function createApp(
   errorOutput = new CaptureWritable(),
   input = new PassThrough(),
   isInteractive = false,
-  configOverrides: Partial<PicodeConfig> = {}
+  configOverrides: Partial<PicodeConfig> = {},
+  verbose = false
 ): { app: TerminalApp; store: SessionStore; output: CaptureWritable; errorOutput: CaptureWritable } {
   const store = new SessionStore({
     workspaceRoot,
@@ -153,7 +154,8 @@ function createApp(
       input,
       output,
       errorOutput,
-      isInteractive
+      isInteractive,
+      verbose
     }),
     store,
     output,
@@ -174,10 +176,36 @@ describe("slash commands and terminal task lifecycle", () => {
       identifier: "abc123"
     });
     expect(parseCliCommand("/compact")).toEqual({ kind: "compact" });
+    expect(parseCliCommand("/verbose")).toEqual({ kind: "verbose", enabled: true });
+    expect(parseCliCommand("/verbose off")).toEqual({ kind: "verbose", enabled: false });
     expect(parseCliCommand("/exit")).toEqual({ kind: "exit" });
     expect(() => parseCliCommand("/resume")).toThrowError(CliCommandError);
     expect(() => parseCliCommand("/compact now")).toThrowError(CliCommandError);
+    expect(() => parseCliCommand("/verbose on")).toThrowError(CliCommandError);
     expect(() => parseCliCommand("/unknown")).toThrowError(CliCommandError);
+  });
+
+  it("toggles verbose output for the current process", async () => {
+    const workspace = temporaryDirectory("picode-ui-verbose-workspace-");
+    const root = temporaryDirectory("picode-ui-verbose-root-");
+    const { app, output } = createApp(
+      workspace,
+      root,
+      new ScriptedLlmProvider([
+        { response: finishResponse() },
+        { response: finishResponse() }
+      ])
+    );
+
+    await app.handleLine("/verbose");
+    await app.runTask("verbose task");
+    await app.handleLine("/verbose off");
+    await app.runTask("concise task");
+
+    expect(output.text).toContain("[info] Verbose output enabled.");
+    expect(output.text).toContain("[info] Verbose output disabled.");
+    expect(output.text.match(/\[tool\] finish/g)?.length).toBe(1);
+    expect(output.text.match(/\[tool result\] finish ok/g)?.length).toBe(1);
   });
 
   it("persists the completed task and maps every terminal state to its CLI exit code", async () => {
@@ -204,6 +232,8 @@ describe("slash commands and terminal task lifecycle", () => {
     expect(saved.pendingTool).toBeUndefined();
     expect(saved.messages.at(-1)).toMatchObject({ role: "tool", toolCallId: "finish-1" });
     expect(output.text).toContain("[completed]");
+    expect(output.text).not.toContain("[tool] finish");
+    expect(output.text).toContain("[context]");
     expect(exitCodeForTerminalState("completed")).toBe(0);
     expect(exitCodeForTerminalState("partial")).toBe(2);
     expect(exitCodeForTerminalState("failed")).toBe(3);
@@ -510,7 +540,7 @@ describe("slash commands and terminal task lifecycle", () => {
     const root = temporaryDirectory("picode-cli-phase4-root-");
     const output = new CaptureWritable();
     const errorOutput = new CaptureWritable();
-    const result = main(["--cwd", workspace, "finish", "from", "cli"], {
+    const result = main(["--verbose", "--cwd", workspace, "finish", "from", "cli"], {
       startupDir,
       env: {
         PICODE_API_KEY: "ui-test-secret",
@@ -528,6 +558,8 @@ describe("slash commands and terminal task lifecycle", () => {
     expect(exitCode).toBe(0);
     expect(errorOutput.text).toContain("usage was unavailable");
     expect(errorOutput.text).not.toContain("ui-test-secret");
+    expect(output.text).toContain("[tool] finish");
+    expect(output.text).toContain("[tool result] finish ok");
     expect(output.text).toContain("[completed]");
     const projects = readdirSync(join(root, "projects"));
     expect(projects).toHaveLength(1);

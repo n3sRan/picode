@@ -23,6 +23,7 @@
 - 基本多会话：新建、列出、恢复。
 - 原子会话快照、usage 记录、上下文计量和上下文上限保护。
 - 显式 `/compact` 压缩，以及默认关闭、可配置阈值的自动压缩。
+- 终端 verbose 控制：`--verbose`、`/verbose` 和 `/verbose off`，以及始终显示的独立 `[context]` 信息。
 - 确定性测试与一个显式运行的真实 API E2E。
 
 ## 当前 MVP 明确不做
@@ -38,6 +39,14 @@
 - 完整混合 token 校准。
 
 这些能力只可在 MVP 全部验收且时间允许时作为可选增强，不得阻塞核心交付。
+
+## 终端详细度控制（已实现）
+
+- 终端详细度默认关闭，可由启动参数 `--verbose` 或交互命令 `/verbose` 开启，并由 `/verbose off` 关闭。
+- verbose 状态只在当前进程内生效，不写入 session；`--verbose` 同时适用于交互模式和单任务模式。
+- verbose 开启时保持完整的 tool、tool result 和每轮 usage 输出；关闭时普通工具压缩为包含工具名和执行结果状态的一行，隐藏 call ID、参数和返回值，并隐藏每次请求的 `[usage]`。
+- finish 在 verbose 关闭时隐藏自身的 tool/tool result，只保留最终状态；verbose 开启时保持完整输出。
+- finish 终态后的上下文计量以独立的 `[context]` 信息输出，位于状态行之后，且无论 verbose 是否开启都显示。
 
 ## 不可破坏的设计约束
 

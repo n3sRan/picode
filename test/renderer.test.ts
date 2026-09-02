@@ -29,11 +29,20 @@ function toolCall() {
   } as const;
 }
 
+function finishToolCall() {
+  return {
+    id: "finish-1",
+    name: "finish",
+    rawArguments: JSON.stringify({ status: "success", summary: "done" }),
+    arguments: { status: "success", summary: "done" }
+  } as const;
+}
+
 describe("TerminalRenderer", () => {
   it("renders event categories as readable non-TTY blocks", () => {
     const output = new CaptureWritable();
     const errorOutput = new CaptureWritable();
-    const renderer = new TerminalRenderer({ output, errorOutput, color: false });
+    const renderer = new TerminalRenderer({ output, errorOutput, color: false, verbose: true });
     const events: AgentEvent[] = [
       { type: "state_changed", state: "streaming" },
       { type: "assistant_text_delta", delta: "I found the issue." },
@@ -88,14 +97,72 @@ describe("TerminalRenderer", () => {
     expect(output.text).toContain("[approval] approved");
     expect(output.text).toContain("[tool result] read_file ok");
     expect(output.text).toContain("[completed] Task completed.");
-    expect(output.text).toContain("context: 12,345 tokens (1.23% of 1,000,000; usage anchor)");
+    expect(output.text).toContain("[context] 12,345 tokens (1.23% of 1,000,000; usage anchor)");
     expect(errorOutput.text).toContain("picode: [warning] Context usage is high (75%)");
-    expect(output.text.indexOf("context: 12,345 tokens")).toBeGreaterThan(
+    expect(output.text.indexOf("[context] 12,345 tokens")).toBeGreaterThan(
       output.text.indexOf("[completed] Task completed.")
     );
 
     expect(output.text.indexOf("[assistant]")).toBeLessThan(output.text.indexOf("[tool] read_file"));
     expect(output.text.indexOf("[tool] read_file")).toBeLessThan(output.text.indexOf("[tool result] read_file ok"));
+  });
+
+  it("keeps concise tool output and always shows terminal context when verbose is off", () => {
+    const output = new CaptureWritable();
+    const errorOutput = new CaptureWritable();
+    const renderer = new TerminalRenderer({ output, errorOutput, color: false });
+    const finish = finishToolCall();
+    const events: AgentEvent[] = [
+      { type: "state_changed", state: "streaming" },
+      { type: "assistant_text_delta", delta: "I finished the task." },
+      { type: "llm_usage_received", usage: { promptTokens: 42, completionTokens: 8, totalTokens: 50 } },
+      {
+        type: "assistant_message_completed",
+        message: {
+          role: "assistant",
+          content: "I finished the task.",
+          toolCalls: [toolCall()],
+          finishReason: "tool_calls"
+        }
+      },
+      { type: "tool_requested", toolCall: toolCall() },
+      { type: "tool_completed", toolCallId: "call-1", status: "ok", summary: "Read secret result." },
+      { type: "tool_requested", toolCall: finish },
+      { type: "tool_completed", toolCallId: finish.id, status: "ok", summary: "done" },
+      {
+        type: "context_usage",
+        usage: {
+          estimatedTokens: 12_345,
+          ratio: 0.0123,
+          contextWindow: 1_000_000,
+          source: "usage_anchor"
+        }
+      },
+      {
+        type: "agent_terminated",
+        state: "completed",
+        reason: "finish_success",
+        message: "Task completed."
+      }
+    ];
+
+    for (const event of events) {
+      renderer.render(event);
+    }
+
+    expect(output.text).toContain("[assistant]\nI finished the task.");
+    expect(output.text).toContain("[tool] read_file ok");
+    expect(output.text).not.toContain("[usage]");
+    expect(output.text).not.toContain("[tool result]");
+    expect(output.text).not.toContain("[tool] finish");
+    expect(output.text).not.toContain("call_id:");
+    expect(output.text).not.toContain("arguments:");
+    expect(output.text).not.toContain("Read secret result.");
+    expect(output.text).toContain("[completed] Task completed.");
+    expect(output.text).toContain("[context] 12,345 tokens (1.23% of 1,000,000; usage anchor)");
+    expect(output.text.indexOf("[context] 12,345 tokens")).toBeGreaterThan(
+      output.text.indexOf("[completed] Task completed.")
+    );
   });
 
   it("uses ANSI colors only when explicitly enabled", () => {

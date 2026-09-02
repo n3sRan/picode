@@ -6,7 +6,7 @@
 - 产品名称与 CLI 命令：`picode`
 - 开发仓库：当前 Git 仓库根目录
 - 目标平台：macOS/Linux，Node.js 22+
-- 上下文增强状态：`finish` 后上下文计量、显式 `/compact` 和可配置自动压缩均已实现
+- 上下文增强状态：`finish` 后上下文计量、显式 `/compact`、可配置自动压缩和终端 verbose 控制均已实现
 
 本文定义截止日前必须完成的 MVP。最终两分钟演示题目和主要卖点在实现稳定后决定。
 
@@ -64,6 +64,16 @@
 5. append-only event log 和精细崩溃重放；
 可选增强不得改变 MVP 的公开运行方式或延误测试和演示。
 
+### 3.4 终端输出详细度控制（已实现）
+
+终端 verbose 控制只改变展示层，不改变 Agent Loop、工具协议、session 消息或任务限制：
+
+- 默认 verbose 关闭；启动参数 `--verbose` 和交互命令 `/verbose` 在当前进程内开启，`/verbose off` 关闭；状态不写入 session，`/resume` 后也不恢复该开关。
+- verbose 开启时保持当前完整的 tool、tool result 和每次 LLM request 的 `[usage]` 输出。
+- verbose 关闭时普通工具只显示一行工具名和简短执行结果状态，不显式显示 call ID、参数或返回值；每次 request 的 `[usage]` 不显示。
+- verbose 关闭时，finish 工具自身的 tool 与 tool result 不显示，只显示最终终态；verbose 开启时保持现有 finish 输出。
+- finish 终态后的上下文计量改为独立的 `[context]` 行，位于终态状态行之后，且两种 verbose 模式都显示。
+
 ## 4. CLI
 
 ### 4.1 启动
@@ -72,6 +82,7 @@
 - `picode "<task>"`：创建新会话并执行一个任务，完成后退出。
 - `picode --cwd <path>`：以指定的现有目录为工作区。
 - `picode --cwd <path> "<task>"`：在指定目录执行单任务。
+- `picode --verbose`：启动时开启当前进程的完整终端输出。
 
 工作区启动时转换为 canonical path。若标准输入不是 TTY，需要审批的工具默认拒绝，不能隐式批准。
 
@@ -81,6 +92,8 @@
 - `/sessions`
 - `/resume <id>`
 - `/compact`
+- `/verbose`
+- `/verbose off`
 - `/exit`
 
 只有 Agent 空闲或当前任务已终止时才能切换会话。会话 ID 使用 UUID，CLI 可接受无歧义短前缀。
@@ -304,9 +317,11 @@
 ### 11.1 CLI 输出
 
 - assistant 流式文本以 `[assistant]` 区块开始，并在下一类事件前结束当前文本区块。
-- 工具调用显示工具名、call ID 和经过脱敏的参数摘要；工具结果显示工具名、状态、call ID 和结果摘要。
+- verbose 开启时，工具调用显示工具名、call ID 和经过脱敏的参数摘要；工具结果显示工具名、状态、call ID 和结果摘要。
+- verbose 关闭时，普通工具在完成后只显示一行工具名和简短成功/失败状态，不显示 call ID、参数和结果内容；finish 工具的调用与结果行均隐藏。
 - 审批请求和审批结果单独显示；实际审批输入仍由 Approval Broker 独占。
-- usage 至少显示当前请求序号和已返回的 `prompt_tokens`；存在时显示 `completion_tokens` 和 `total_tokens`。
+- verbose 开启时，usage 至少显示当前请求序号和已返回的 `prompt_tokens`；存在时显示 `completion_tokens` 和 `total_tokens`。verbose 关闭时不显示每次 request 的 `[usage]`。
+- finish 终态之后始终单独显示一条 `[context]` 信息，不受 verbose 开关影响。
 - TTY 输出可以使用 ANSI 语义颜色；非 TTY 输出必须不包含 ANSI 控制序列并保持稳定文本格式。
 - 超长参数、命令和结果摘要在展示层截断，不能改变发送给模型或保存到 session 的内容。
 
@@ -323,6 +338,7 @@
 - session 原子保存/恢复、损坏 JSON 和 pending tool 警告。
 - usage 记录、75% 警告、90% 停止和缺失 usage 降级。
 - CLI slash commands 和单任务退出码。
+- verbose 启动参数和 `/verbose`、`/verbose off` 的当前进程状态切换；普通工具简洁行、finish 隐藏中间输出、request usage 隐藏，以及始终显示独立 `[context]`。
 
 ### 真实 E2E
 
@@ -357,15 +373,22 @@
 3. 发出 `context_usage` 事件；
 4. 发出 `agent_terminated`，并将同一份度量附在终态事件上。
 
-终端 renderer 将度量放在 `[completed]`、`[partial]` 或 `[failed]` 的末尾，至少展示：
+终端 renderer 在 `[completed]`、`[partial]` 或 `[failed]` 状态之后独立展示 `[context]` 信息，至少包含：
 
 ```text
-context: 12,345 tokens (1.23% of 1,000,000; usage anchor)
+[context] 12,345 tokens (1.23% of 1,000,000; usage anchor)
 ```
 
 这里的 token 数是“当前上下文估算值”，不是一次新的 LLM 请求，也不增加请求次数。若最近一次请求有 `prompt_tokens`，继续使用现有 usage anchor 加新增消息的保守估算；若 usage 缺失，则对完整上下文估算，并明确标注 fallback。计算范围与下一次请求一致，包含消息和工具 schema，但不包含尚未发送的模型输出。
 
-该度量适用于由 `finish(status=success|partial|failure)` 驱动的三种终态；它必须出现在 accepted result 之后、终态展示之前。其他原因（超时、中断、限制等）继续使用现有终止流程，不因展示度量而发送额外请求。
+```text
+[completed] 收到问候，无实际任务待执行，等待用户提出下一步需求。
+[context] 3,445 tokens (0.34% of 1,000,000; usage anchor)
+```
+
+`[context]` 不属于 verbose 内容；verbose 关闭时仍必须显示。
+
+该度量适用于由 `finish(status=success|partial|failure)` 驱动的三种终态；在终端 UI 中它必须以独立信息出现在 accepted result 对应的终态状态行之后。其他原因（超时、中断、限制等）继续使用现有终止流程，不因展示度量而发送额外请求。
 
 ### 14.2 显式 `/compact`
 
@@ -437,3 +460,17 @@ context: 12,345 tokens (1.23% of 1,000,000; usage anchor)
 - 自动压缩成功、无进展、请求额度不足、超时和上下文仍超限时的有限重试与回退；
 - 压缩后的 session 原子保存、恢复、脱敏和崩溃时不重放；
 - 从打包后的 `picode` bin 在仓库外 demo 中显式演示 `/compact` 或自动压缩，并保持真实 API 流程仍需单独 smoke run。
+
+### 14.5 终端 verbose 控制（已实现）
+
+该功能只改变展示层，不改变发送给模型的消息、工具执行、session 快照或任务限制。`TerminalApp` 持有当前进程的 verbose 状态，CLI 启动参数负责初始值，交互命令负责运行时切换；session 不保存该状态。
+
+输出规则：
+
+1. 默认关闭；`--verbose` 和 `/verbose` 开启，`/verbose off` 关闭。
+2. verbose 开启时沿用当前完整输出，包括普通工具的 tool/tool result、参数与结果摘要，以及每次 request 的 `[usage]`。
+3. verbose 关闭时，普通工具在收到结果后只输出一行，至少包含工具名和结果状态；不输出 ID、参数或返回值，也不显示每次 request 的 `[usage]`。
+4. verbose 关闭时，finish 的 tool/tool result 两行都不输出，只保留 `[completed]`、`[partial]` 或其他最终状态；verbose 开启时保持当前 finish 输出。
+5. finish 终态后始终输出独立的 `[context]` 行，顺序为状态行在前、context 行在后。
+
+实现时不额外引入 `/verbose on`；未列出的参数按 slash command 非法输入处理。

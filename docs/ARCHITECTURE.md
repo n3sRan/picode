@@ -317,10 +317,10 @@ flowchart TD
     C --> D[measure current messages + tools]
     D --> E[emit context_usage]
     E --> F[emit agent_terminated with same usage]
-    F --> G[renderer appends metric to terminal block]
+    F --> G[renderer writes independent context block after status]
 ```
 
-这样 terminal renderer 可以在 `[completed]`、`[partial]` 或 `[failed]` 区块末尾输出 `estimatedTokens`、百分比和估算来源。度量不触发新的模型请求；它反映的是已经包含 `finish` result 的当前历史。
+这样 terminal renderer 可以在 `[completed]`、`[partial]` 或 `[failed]` 状态之后以独立 `[context]` 区块输出 `estimatedTokens`、百分比和估算来源。度量不触发新的模型请求；它反映的是已经包含 `finish` result 的当前历史。
 
 新增 `ContextCompactor`，负责选择安全裁剪边界、调用摘要模型和组合新消息。它不执行工具，摘要请求不传入 tool definitions，也不要求 `finish`。摘要输出通过 API Key 脱敏和普通文本校验后，包装为带历史摘要标记的 synthetic assistant message（`role=assistant`、`toolCalls=[]`、`finishReason=stop`）；标记用于提醒后续模型这是历史上下文，不是新的用户任务。
 
@@ -392,11 +392,25 @@ MVP 不通过事件日志精确重建 tool-call/result，不承诺从任意写�
 - 命令审批；
 - 解析 `/compact` 并把压缩操作委托给 runtime/context service；
 - Ctrl+C 转换为 AbortSignal；
-- session、usage warning 和终态展示。
+- session、usage warning 和终态展示；
+- 维护当前进程的 verbose 状态，并根据该状态选择终端展示粒度。
 
 `TerminalRenderer` 不改变 Agent 状态或执行工具。assistant 流式文本以独立区块输出；工具调用、工具结果、审批、usage、warning 和终态使用不同标签、间距和语义颜色。颜色只在 TTY 中启用，非 TTY 输出不包含 ANSI 控制序列，便于日志和管道消费。工具参数和结果摘要在展示层截断，避免单条输出占满终端。
 
 UI不直接执行工具、修改 model context 或写 session。Agent busy 时拒绝新的普通输入；审批输入由 Approval Broker独占，避免与主 prompt 竞争 stdin。
+
+### 10.1 终端详细度控制（已实现）
+
+verbose 是 `TerminalApp`/renderer 的进程级展示状态，不进入 session，也不改变 Agent Loop 产生的事件。CLI 的 `--verbose` 设置初始值；交互命令 `/verbose` 开启，`/verbose off` 关闭。未列出的参数按命令错误处理。
+
+renderer 的两种模式遵循以下规则：
+
+- verbose 开启时沿用当前完整 tool、tool result、参数、结果摘要和每次 request 的 `[usage]` 展示；
+- verbose 关闭时，普通工具等到 `tool_completed` 后合并为一行工具名 + 执行状态，隐藏 ID、参数和返回值；
+- verbose 关闭时过滤 finish 对应的 `tool_requested` 与 `tool_completed` 展示，仍保留最终终态；verbose 开启时不改变现状；
+- finish 终态后的 context usage 单独作为 `[context]` 行输出，位于状态行之后，不受 verbose 开关影响。
+
+该设计只改变 UI 渲染，不改变工具执行、事件记录、消息历史和 API 请求。
 
 ## 11. 测试边界
 

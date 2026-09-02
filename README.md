@@ -77,12 +77,13 @@ picode --help
 ## CLI 用法
 
 ```text
-picode [--cwd <path>] [<task>]
+picode [--cwd <path>] [--verbose] [<task>]
 ```
 
 - `picode`：进入交互模式；存在最近 session 时恢复，否则创建新 session。
 - `picode "<task>"`：创建新 session，执行单个任务并以终态退出码结束。
 - `--cwd <path>`：指定一个已存在的工作区目录。
+- `--verbose`：启动时开启当前进程的完整工具、usage 和 finish 输出。
 
 交互模式支持：
 
@@ -92,7 +93,11 @@ picode [--cwd <path>] [<task>]
 | `/sessions` | 列出当前工作区的 session |
 | `/resume <id>` | 按完整 ID 或无歧义前缀恢复 session |
 | `/compact` | 用一次无工具摘要请求整理安全的历史上下文 |
+| `/verbose` | 开启当前进程的详细终端输出 |
+| `/verbose off` | 关闭当前进程的详细终端输出 |
 | `/exit` | 退出交互模式 |
+
+终端输出详细度默认关闭。启动时使用 `--verbose` 或交互中输入 `/verbose` 开启完整输出，使用 `/verbose off` 关闭。关闭时普通工具只在完成后显示工具名和执行状态的一行，finish 只显示最终状态；每轮 `[usage]` 隐藏，但 finish 后的独立 `[context]` 信息始终显示。该开关只在当前进程内生效，不写入 session。
 
 单任务模式的退出码：
 
@@ -146,7 +151,7 @@ npm test
 
 - 只支持 OpenAI-compatible Chat Completions，不支持其他模型协议。
 - 不提供 Web UI、IDE 插件、MCP、子 Agent、并行工具或 Windows 支持。
-- 不自动压缩上下文；上下文保护使用保守估算，并不等同于 tokenizer 计算。
+- 自动压缩默认关闭；上下文保护使用保守估算，并不等同于 tokenizer 计算。
 - shell 审批是用户确认机制，不是容器或操作系统级沙箱。
 
 ## License

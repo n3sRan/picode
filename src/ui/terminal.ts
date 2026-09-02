@@ -28,6 +28,7 @@ export interface TerminalAppOptions {
   output?: Writable;
   errorOutput?: Writable;
   isInteractive?: boolean;
+  verbose?: boolean;
 }
 
 export class TerminalBusyError extends Error {
@@ -59,6 +60,7 @@ export class TerminalApp {
   private readonly errorOutput: Writable;
   private readonly isInteractive: boolean;
   private readonly renderer: TerminalRenderer;
+  private verbose: boolean;
   private currentSession: SessionSnapshot | undefined;
   private busy = false;
   private exiting = false;
@@ -77,9 +79,11 @@ export class TerminalApp {
     this.isInteractive = options.isInteractive ??
       ((this.input as Readable & { isTTY?: boolean }).isTTY === true &&
         (this.output as Writable & { isTTY?: boolean }).isTTY === true);
+    this.verbose = options.verbose ?? false;
     this.renderer = new TerminalRenderer({
       output: this.output,
-      errorOutput: this.errorOutput
+      errorOutput: this.errorOutput,
+      verbose: this.verbose
     });
   }
 
@@ -227,6 +231,11 @@ export class TerminalApp {
           return;
         case "compact":
           await this.compactCurrentSession();
+          return;
+        case "verbose":
+          this.verbose = command.enabled;
+          this.renderer.setVerbose(this.verbose);
+          this.renderer.renderInfo(command.enabled ? "Verbose output enabled." : "Verbose output disabled.");
           return;
         case "exit":
           this.exiting = true;

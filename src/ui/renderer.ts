@@ -22,6 +22,7 @@ export interface TerminalRendererOptions {
   output: Writable;
   errorOutput: Writable;
   color?: boolean;
+  verbose?: boolean;
 }
 
 function isTty(stream: Writable): boolean {
@@ -43,10 +44,6 @@ function formatContextUsageValue(usage: ContextUsage): string {
   const percent = `${(usage.ratio * 100).toFixed(2).replace(/\.?0+$/, "")}%`;
   const source = usage.source === "fallback_estimate" ? "fallback estimate" : "usage anchor";
   return `${usage.estimatedTokens.toLocaleString("en-US")} tokens (${percent} of ${usage.contextWindow.toLocaleString("en-US")}; ${source})`;
-}
-
-function formatContextUsage(usage: ContextUsage): string {
-  return `context: ${formatContextUsageValue(usage)}`;
 }
 
 function toolArguments(value: Record<string, unknown>): string | undefined {
@@ -73,6 +70,7 @@ export class TerminalRenderer {
   private readonly errorOutput: Writable;
   private readonly outputColor: boolean;
   private readonly errorColor: boolean;
+  private verbose: boolean;
   private assistantTextOpen = false;
   private hasOutput = false;
   private requestCount = 0;
@@ -84,6 +82,11 @@ export class TerminalRenderer {
     this.errorOutput = options.errorOutput;
     this.outputColor = options.color ?? isTty(this.output);
     this.errorColor = options.color ?? isTty(this.errorOutput);
+    this.verbose = options.verbose ?? false;
+  }
+
+  public setVerbose(verbose: boolean): void {
+    this.verbose = verbose;
   }
 
   /** Starts a new task's display state while keeping the surrounding session output. */
@@ -126,6 +129,9 @@ export class TerminalRenderer {
         this.finishAssistantText();
         return;
       case "llm_usage_received": {
+        if (!this.verbose) {
+          return;
+        }
         const usage = [
           `request=${this.requestCount}`,
           `prompt_tokens=${event.usage.promptTokens}`,
@@ -137,6 +143,9 @@ export class TerminalRenderer {
       }
       case "tool_requested": {
         this.toolNames.set(event.toolCall.id, event.toolCall.name);
+        if (!this.verbose) {
+          return;
+        }
         const serializedArguments = toolArguments(event.toolCall.arguments);
         const details = [
           `call_id: ${truncate(event.toolCall.id, MAX_DISPLAY_LENGTH)}`,
@@ -161,6 +170,13 @@ export class TerminalRenderer {
         return;
       case "tool_completed": {
         const toolName = this.toolNames.get(event.toolCallId) ?? "tool";
+        if (!this.verbose) {
+          if (toolName === "finish") {
+            return;
+          }
+          this.writeBlock("tool", resultTone(event.status), `${toolName} ${event.status}`);
+          return;
+        }
         this.writeBlock("tool result", resultTone(event.status), `${toolName} ${event.status}`, [
           `call_id: ${truncate(event.toolCallId, MAX_DISPLAY_LENGTH)}`,
           truncate(event.summary, MAX_DISPLAY_LENGTH)
@@ -190,9 +206,11 @@ export class TerminalRenderer {
           this.writeBlock(
             event.state,
             terminalTone(event.state),
-            event.message,
-            contextUsage === undefined ? [] : [formatContextUsage(contextUsage)]
+            event.message
           );
+          if (contextUsage !== undefined) {
+            this.writeBlock("context", "usage", formatContextUsageValue(contextUsage));
+          }
           this.pendingContextUsage = undefined;
         }
         return;

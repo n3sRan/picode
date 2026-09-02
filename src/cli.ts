@@ -15,6 +15,7 @@ import { exitCodeForTerminalState, TerminalApp } from "./ui/index.js";
 export interface CliOptions {
   cwd: string;
   help: boolean;
+  verbose: boolean;
   task?: string;
 }
 
@@ -41,10 +42,11 @@ export class CliUsageError extends Error {
   }
 }
 
-const USAGE = `Usage: picode [--cwd <path>] [<task>]
+const USAGE = `Usage: picode [--cwd <path>] [--verbose] [<task>]
 
 Options:
   --cwd <path>  Use an existing directory as the workspace.
+  --verbose     Show detailed tool, usage, and finish output.
   --help        Show this help.
 
 Interactive commands:
@@ -67,6 +69,7 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
   const canonicalStartupDir = canonicalCliDirectory(startupDir, "startup directory");
   let cwd = canonicalStartupDir;
   let help = false;
+  let verbose = false;
   let task: string | undefined;
   let index = 0;
 
@@ -78,6 +81,12 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
 
     if (argument === "--help" || argument === "-h") {
       help = true;
+      index += 1;
+      continue;
+    }
+
+    if (argument === "--verbose") {
+      verbose = true;
       index += 1;
       continue;
     }
@@ -110,7 +119,7 @@ export function parseCliArgs(args: readonly string[], startupDir = process.cwd()
     index += 1;
   }
 
-  return { cwd, help, ...(task === undefined ? {} : { task }) };
+  return { cwd, help, verbose, ...(task === undefined ? {} : { task }) };
 }
 
 function writeCliError(
@@ -159,6 +168,7 @@ async function runConfiguredCli(
       input: options.input ?? process.stdin,
       output: stdout as unknown as Writable,
       errorOutput: stderr as unknown as Writable,
+      verbose: cliOptions.verbose,
       ...(options.isInteractive === undefined ? {} : { isInteractive: options.isInteractive })
     });
     if (cliOptions.task !== undefined) {

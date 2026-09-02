@@ -4,6 +4,7 @@
 
 - 当前状态：Phase 0-5 已完成，Phase 6 进行中（限制与文件搜索边界、基础结构清理、LLM 运行参数配置、取消/超时处理、批次调用关联、macOS 大小写路径保护和恢复/限制回归测试已完成，下一批待定）。
 - Phase 7 已开始：批次 H（`finish` 后上下文计量）、I（显式 `/compact`）和 J（默认关闭的自动压缩）已完成，下一步进行全量回归与隔离演示复核。
+- Phase 8 已实现：终端 verbose 控制与 finish/context 输出重构已完成，待打包视频流程复核。
 - 优先完成可解释、可测试的 MVP，不以生产级完整性为目标。
 - 每个阶段都必须保持可构建、可测试。
 - 可选增强只能在全部 MVP 验收通过后开始。
@@ -20,6 +21,7 @@
 | M5 | 全量验证与隔离 E2E | 本地 tarball 可在仓库外 demo 从 `picode` bin 完成真实任务（已由用户手动验证） |
 | M6 | 文档、演示与提交检查 | 行为与文档一致，演示方案和提交物就绪 |
 | M7 | 上下文可观测性与压缩 | `finish` 终态显示当前上下文（已完成）；`/compact` 可安全整理 session；可选自动压缩在阈值前触发且关闭时行为不变 |
+| M8 | 终端详细度与 finish 展示 | `--verbose`、`/verbose`、`/verbose off` 可切换进程级展示；普通工具可折叠；finish 中间输出按模式隐藏；独立 `[context]` 始终显示（代码与确定性测试已完成） |
 
 若进度落后，优先削减 UI 装饰和便利功能，不削减 Loop、参数校验、路径边界、命令审批、终止限制、基本持久化和确定性测试。
 
@@ -206,7 +208,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 
 ### 10.1 设计冻结项
 
-1. `finish` 路径：先追加 accepted tool result 和安全 checkpoint，再计算当前消息 + tool schema 的上下文估算；最后将 token 数和窗口百分比放到 `[completed]`、`[partial]` 或 `[failed]` 终态块末尾。不发送额外 LLM 请求。
+1. `finish` 路径：先追加 accepted tool result 和安全 checkpoint，再计算当前消息 + tool schema 的上下文估算；最后将 token 数和窗口百分比放到 `[completed]`、`[partial]` 或 `[failed]` 状态之后的独立 `[context]` 行。不发送额外 LLM 请求。
 2. BudgetTracker：保留现有真实 `prompt_tokens` anchor + 新增内容估算；usage 缺失、session 恢复或压缩后重新从 fallback 估算，并标记来源。
 3. ContextCompactor：摘要请求不带工具、不执行本地副作用、不要求 `finish`；只裁剪完整消息组，保留 system message、当前任务和必要的最近 tool call/result 配对；压缩失败不替换原消息。
 4. `/compact`：仅交互模式、仅 idle/终态可用；自动开关关闭时依然有效；无可压缩消息返回 no-op；成功后原子保存并使旧 usage anchor 失效。
@@ -218,9 +220,9 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 批次 H：完成度量和终态展示（已完成）。
 
 - 已扩展 BudgetTracker 的当前上下文计算接口和 `AgentRunResult`/事件数据；
-- 已在 finish tool result 写入后计算度量，并让 renderer 将其作为终态末尾详情；
+- 已在 finish tool result 写入后计算度量，并让 renderer 将其作为终态后的独立 `[context]` 信息；
 - 已覆盖 usage anchor、fallback、tool schema、finish result、终态顺序和“不得增加请求”的行为；
-- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`；批次 H 当时 82 个测试通过，当前全量回归为 97 个测试通过。
+- 已运行 `npm run build`、`npm run typecheck` 和 `npm test`；批次 H 当时 82 个测试通过，当前全量回归为 100 个测试通过。
 
 批次 I：ContextCompactor 与显式 `/compact`（已完成）。
 
@@ -252,7 +254,46 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 - 压缩后的 session 能原子恢复，摘要和输出不会泄露 API Key；
 - 隔离 demo 可以从打包后的 bin 展示读、改、验证、压缩、恢复和 `finish`，且开发仓库无演示产物（批次 K 待复核）。
 
-## 11. 可选增强门
+## 11. Phase 8：终端详细度与 finish 输出重构
+
+状态：代码与确定性测试已完成，待打包视频流程复核。
+
+目标是在不改变 Agent Loop、工具执行、消息历史、session 持久化和任务限制的前提下，减少交互终端被普通工具细节快速刷屏的问题，同时避免 finish 的 tool call 覆盖前面的 assistant 文本。实现顺序为“进程级 verbose 状态 → CLI/slash command → renderer 分级输出 → 回归测试与视频复核”。
+
+### 11.1 设计冻结项
+
+1. verbose 默认关闭；启动参数 `--verbose` 或交互命令 `/verbose` 开启，`/verbose off` 关闭；状态只在当前进程有效，不写入 session。
+2. verbose 开启时保持当前完整输出：普通工具的 tool/tool result、call ID、脱敏参数、结果摘要，以及每次 LLM request 的 `[usage]`。
+3. verbose 关闭时，普通工具只在收到执行结果后输出一行，包含工具名和简短执行成功/失败状态；不显示 call ID、参数和返回值；每次 request 的 `[usage]` 不显示。
+4. verbose 关闭时，finish 对应的 tool/tool result 两行都不显示，只保留最终 `[completed]`、`[partial]`、`[failed]` 或其他终态；verbose 开启时 finish 输出保持现状。
+5. finish 后的上下文计量从终态块内部重构为独立 `[context]` 行，顺序固定为状态行在前、context 行在后；两种 verbose 模式都显示。
+6. 不额外实现 `/verbose on`；未列出的命令参数按现有 slash command 错误路径处理。
+
+### 11.2 实现批次
+
+- 扩展 CLI 参数解析与帮助文本，增加 `--verbose`，并让 `TerminalApp` 在启动时接收进程级初始状态。
+- 扩展交互命令解析与运行时状态切换；`/new`、`/resume` 不改变当前进程的 verbose 状态，session 快照不增加字段。
+- 在 renderer 中增加简洁工具结果格式：以 `tool_completed` 为输出时机；finish 根据 verbose 状态过滤 tool/tool result；usage 事件仅在 verbose 开启时展示。
+- 将当前 finish context 输出改为独立 `[context]` 区块，同时保持 token 数、窗口百分比和 source 信息不变。
+- 已同步 README、SPEC、ARCHITECTURE、AGENTS 和帮助文本，明确 verbose 关闭时仍显示 context。
+
+### 11.3 验收与测试
+
+- 默认关闭、`--verbose` 开启、`/verbose` 开启和 `/verbose off` 关闭；状态不跨 session 持久化。
+- verbose 开启时回归现有完整 tool/tool result/usage 输出。
+- verbose 关闭时每个普通工具仅一行，包含工具名和执行结果状态，不含 ID、参数、返回值。
+- verbose 关闭时 finish 不输出 tool/tool result，但仍输出最终状态；assistant 文本不被 finish call 的细节覆盖。
+- 两种模式都输出独立 `[context]`，且位于最终状态之后；context 内容仍包含 token、百分比和估算来源。
+- busy、非法 slash command、非 TTY 单任务模式和 ANSI 输出规则不被破坏。
+
+### 11.4 Phase 8 出口
+
+- CLI 与交互命令可切换进程级 verbose 状态，session 快照格式不变（已验证）。
+- 两种 verbose 模式下普通工具和 finish 的输出符合设计冻结项，且不会泄露 API Key（已验证）。
+- `[context]` 独立输出在终态之后可观察（已验证成功终态；部分/失败 finish 复用同一 renderer 分支，待视频流程复核）。
+- build、typecheck、全量确定性测试已通过；仓库外打包 bin 的 verbose 开启/关闭流程待复核。
+
+## 12. 可选增强门
 
 只有以下条件全部满足后才评估增强：
 
@@ -272,7 +313,7 @@ CLI UI 重构出口：事件类型有清晰的终端分组；TTY 使用 ANSI 语
 
 不要为了实现增强改变已验证的核心路径。
 
-## 12. 测试解释要求
+## 13. 测试解释要求
 
 每新增一批测试文件后，向用户说明：
 

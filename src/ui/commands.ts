@@ -5,6 +5,7 @@ export type CliCommand =
   | { kind: "list_sessions" }
   | { kind: "resume_session"; identifier: string }
   | { kind: "compact" }
+  | { kind: "verbose"; enabled: boolean }
   | { kind: "exit" };
 
 export class CliCommandError extends Error {
@@ -43,6 +44,14 @@ export function parseCliCommand(line: string): CliCommand {
         throw new CliCommandError("Usage: /compact");
       }
       return { kind: "compact" };
+    case "/verbose":
+      if (parts.length === 1) {
+        return { kind: "verbose", enabled: true };
+      }
+      if (parts.length === 2 && parts[1] === "off") {
+        return { kind: "verbose", enabled: false };
+      }
+      throw new CliCommandError("Usage: /verbose [off]");
     case "/exit":
       if (parts.length !== 1) {
         throw new CliCommandError("Usage: /exit");

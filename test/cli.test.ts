@@ -30,6 +30,16 @@ describe("CLI argument validation", () => {
     expect(options.cwd).toBe(realpathSync(workspace));
     expect(options.task).toBe("fix the bug");
     expect(options.help).toBe(false);
+    expect(options.verbose).toBe(false);
+  });
+
+  it("accepts --verbose and preserves the task", () => {
+    const startupDir = createTemporaryDirectory();
+
+    const options = parseCliArgs(["--verbose", "fix", "the", "bug"], startupDir);
+
+    expect(options.verbose).toBe(true);
+    expect(options.task).toBe("fix the bug");
   });
 
   it("rejects an invalid --cwd explicitly", () => {
